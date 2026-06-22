@@ -1,0 +1,37 @@
+name: PcsuiteMirror
+options:
+  bundleIdPrefix: com.pcsuite
+  deploymentTarget:
+    macOS: "13.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"            # Swift 5 mode — relaxes strict-concurrency on the FFI classes
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+    ENABLE_HARDENED_RUNTIME: "NO"
+targets:
+  PcsuiteMirror:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+      # swift-bridge generated glue (compiled into the app)
+      - path: ../pcsuite-rs/crates/pcsuite-ffi/generated/SwiftBridgeCore.swift
+      - path: ../pcsuite-rs/crates/pcsuite-ffi/generated/pcsuite-ffi/pcsuite-ffi.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        PRODUCT_BUNDLE_IDENTIFIER: com.pcsuite.mirror
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Bridging-Header.h
+        LIBRARY_SEARCH_PATHS:
+          - $(PROJECT_DIR)/../pcsuite-rs/target/release
+        HEADER_SEARCH_PATHS:
+          - $(PROJECT_DIR)/../pcsuite-rs/crates/pcsuite-ffi/generated
+          - $(PROJECT_DIR)/../pcsuite-rs/crates/pcsuite-ffi/generated/pcsuite-ffi
+        OTHER_LDFLAGS:
+          - -lpcsuite_ffi
+          - -liconv

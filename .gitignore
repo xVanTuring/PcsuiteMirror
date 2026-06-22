@@ -1,0 +1,7 @@
+# xcodegen regenerates the project from project.yml
+PcsuiteMirror.xcodeproj/
+# build output
+build/
+DerivedData/
+*.xcuserstate
+.DS_Store
