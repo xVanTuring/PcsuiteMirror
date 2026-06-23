@@ -47,6 +47,13 @@ final class SessionController {
     /// (so the keyboard should type); `caret*` is the on-device caret in mirror
     /// pixel space when `hasCaret` is true.
     var onInputState: ((Bool, Bool, Double, Double) -> Void)?
+    /// An *established* session dropped unexpectedly (the shared control WS closed
+    /// or errored — covers USB unplug, Wi-Fi loss, and the phone ending the session,
+    /// whether idle or mid-mirror). Delivered on the main queue *after* the dead
+    /// session has been torn down, carrying the device that was connected, so the
+    /// owner can decide whether to reconnect. Not fired for user-initiated
+    /// `disconnect()`.
+    var onConnectionLost: ((DeviceRef) -> Void)?
 
     private let queue = DispatchQueue(label: "com.pcsuite.session")
     private let inputQueue = DispatchQueue(label: "com.pcsuite.input")
@@ -61,6 +68,14 @@ final class SessionController {
     private var frameDone: DispatchSemaphore?
     private var privacyDone: DispatchSemaphore?
     private var cursorDone: DispatchSemaphore?
+    private var watchDone: DispatchSemaphore?
+
+    // Disconnect bookkeeping (touched on `queue`). `connGen` rises on every connect
+    // and every detected loss, so a watcher/recovery callback queued for a stale
+    // connection is ignored. `currentDevice` is what the live session connected to,
+    // reported back when it drops.
+    private var connGen = 0
+    private var currentDevice: DeviceRef?
 
     // True while the phone reports a secure/privacy screen (touched on `queue`).
     // The phone stops the video then, so we suppress black-screen recovery.
@@ -111,6 +126,9 @@ final class SessionController {
                     startVerifyLoop(s)
                 }
                 setSession(s)
+                connGen += 1
+                currentDevice = device
+                startDisconnectWatcher(s, gen: connGen)
                 emitState(.connected(device))
                 emitMirroring(false, nil)
                 log("connected ✓ (\(device.displayName))")
@@ -144,6 +162,11 @@ final class SessionController {
             s.stop_verify()
             done.wait()                 // block until the verify thread exits
             verifyDone = nil
+        }
+        if let s = session, let done = watchDone {
+            s.stop_watch()
+            done.wait()                 // block until the disconnect watcher exits
+            watchDone = nil
         }
         setSession(nil)                 // last ref → Rust Session drops → cleanup
     }
@@ -198,6 +221,16 @@ final class SessionController {
                         f.handle(Data(bytes: v.as_ptr(), count: n))
                     }
                     done.signal()
+                    // The stream ended. If we never asked it to stop (the generation
+                    // is unchanged) and the session-level disconnect watcher hasn't
+                    // already torn things down, the mirror link dropped on its own —
+                    // recover it. The short grace lets a full-connection loss be
+                    // claimed by the disconnect watcher first (it does a complete
+                    // reconnect), so we don't fire a doomed restart against a dead link.
+                    self?.queue.asyncAfter(deadline: .now() + 0.8) {
+                        guard let self, self.mirrorGen == gen, self.screen != nil else { return }
+                        self.handleStreamDropped(maxSize: maxSize)
+                    }
                 }
                 pump.name = "frame-pump"
                 pump.stackSize = 4 << 20
@@ -281,6 +314,7 @@ final class SessionController {
 
     private func stopMirrorLocked() {
         guard let sc = screen, let done = frameDone else { return }
+        mirrorGen += 1                  // invalidate this stream's drop-recovery dispatch
         sc.stop()                       // unblocks the frame, privacy and IME pumps
         done.wait()                     // block until the frame pump exits
         privacyDone?.wait()             // and the privacy pump
@@ -311,6 +345,53 @@ final class SessionController {
         }
         t.name = "verify-loop"
         t.start()
+    }
+
+    // MARK: - Disconnect detection & recovery
+
+    /// Park a thread on the Rust liveness signal for this connection. When the
+    /// control WS dies it returns a reason; we tear the dead session down and
+    /// report the loss (once, for the current generation). `stop_watch()` makes it
+    /// return "" on an intentional teardown, in which case we do nothing.
+    private func startDisconnectWatcher(_ s: PcSession, gen: Int) {
+        let done = DispatchSemaphore(value: 0)
+        watchDone = done
+        let t = Thread { [weak self] in
+            let reason = s.wait_disconnect().toString()
+            done.signal()                       // exiting → teardown's join can proceed
+            guard !reason.isEmpty else { return } // stop_watch() → intentional, no recovery
+            self?.queue.async {
+                guard let self, self.connGen == gen, self.session != nil else { return }
+                self.handleConnectionLost(reason: reason)
+            }
+        }
+        t.name = "disconnect-watch"
+        t.start()
+    }
+
+    /// An established session dropped on its own. Release the dead handles and
+    /// report the loss so the owner can reconnect. Runs on `queue`.
+    private func handleConnectionLost(reason: String) {
+        let device = currentDevice
+        log("connection lost (\(reason))")
+        teardownLocked()              // releases the dead session + stops the mirror
+        connGen += 1                  // any other stale watcher/pump callback now no-ops
+        emitState(.disconnected)      // a clean baseline; the owner may move to .reconnecting
+        if let device { emit { self.onConnectionLost?(device) } }
+    }
+
+    /// The mirror stream ended while the control session is still alive (the phone
+    /// stopped the mirror service, not the whole connection). Re-open it, bounded by
+    /// the same recovery budget as the black-screen watchdog. Runs on `queue`.
+    private func handleStreamDropped(maxSize: Int64) {
+        guard mirrorRecoveries < mirrorRecoverMax else {
+            log("mirror stream dropped; recovery budget exhausted, leaving as-is")
+            return
+        }
+        mirrorRecoveries += 1
+        log("mirror stream dropped → restarting (attempt \(mirrorRecoveries))")
+        stopMirrorLocked()
+        startMirrorLocked(maxSize: maxSize)
     }
 
     // MARK: - Input (mouse / scroll), dispatched off the main thread

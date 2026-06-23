@@ -2,6 +2,14 @@ import Foundation
 import AVFoundation
 import SwiftUI
 
+/// Mirror-window link status, surfaced so the window can show a reconnect overlay
+/// instead of a frozen picture when the connection drops mid-mirror.
+enum MirrorLink: Equatable {
+    case live          // streaming normally (or no mirror window open)
+    case reconnecting  // the link dropped; an auto-reconnect is in progress
+    case lost          // the link dropped and we are not (or no longer) reconnecting
+}
+
 /// Observable app state + intent surface for the UI. All mutations happen on the
 /// main thread (SwiftUI actions, plus controller callbacks which hop to main).
 final class AppModel: ObservableObject {
@@ -15,6 +23,8 @@ final class AppModel: ObservableObject {
     /// Phone-reported secure-screen token ("" / "clear" = none; "password",
     /// "safety", "lockScreen" = a privacy screen the phone handles itself).
     @Published private(set) var privacyState: String = ""
+    /// Mirror-window link status (drives the reconnect overlay).
+    @Published private(set) var mirrorLink: MirrorLink = .live
 
     // Persisted preferences (default ON).
     @Published var autoReconnect: Bool { didSet { Store.autoReconnect = autoReconnect } }
@@ -27,6 +37,13 @@ final class AppModel: ObservableObject {
 
     private let controller = SessionController()
     private lazy var mirror = MirrorWindowManager(model: self)
+
+    // Auto-reconnect bookkeeping (main thread). A bumped `reconnectGen` cancels any
+    // pending attempt; `reconnectDevice` is non-nil only while a sequence is active.
+    private var reconnectGen = 0
+    private var reconnectAttempts = 0
+    private let maxReconnectAttempts = 6
+    private var reconnectDevice: DeviceRef?
 
     /// Set by the mirror window: receives the phone's caret position (mirror
     /// pixel space) or nil when no field is focused. Plain closure (not
@@ -94,21 +111,63 @@ final class AppModel: ObservableObject {
 
     // MARK: - Intents
 
-    func connectUSB() { controller.connect(DeviceRef(transport: .usb, ip: nil), features: features, reconnect: false) }
+    func connectUSB() {
+        cancelReconnect()
+        controller.connect(DeviceRef(transport: .usb, ip: nil), features: features, reconnect: false)
+    }
 
     func connectLAN() {
         let ip = lanIP.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !ip.isEmpty else { return }
+        cancelReconnect()
         controller.connect(DeviceRef(transport: .lan, ip: ip), features: features, reconnect: false)
     }
 
     func reconnectLast() {
         guard let dev = lastDevice else { return }
+        cancelReconnect()
         controller.connect(dev, features: features, reconnect: false)
     }
 
-    func cancelConnect() { controller.cancel() }
-    func disconnect() { closeMirror(); controller.disconnect() }
+    func cancelConnect() { cancelReconnect(); controller.cancel() }
+    func disconnect() { cancelReconnect(); closeMirror(); controller.disconnect() }
+
+    // MARK: - Auto-reconnect on unexpected loss
+
+    /// An established session dropped (USB unplug, Wi-Fi loss, phone ended it). If
+    /// auto-reconnect is on, start a bounded backoff sequence to the same device;
+    /// otherwise just surface the loss to an open mirror window.
+    private func handleConnectionLost(_ device: DeviceRef) {
+        guard autoReconnect else {
+            mirrorLink = mirror.isShowing ? .lost : .live
+            return
+        }
+        reconnectGen += 1
+        reconnectAttempts = 0
+        reconnectDevice = device
+        mirrorLink = mirror.isShowing ? .reconnecting : .live
+        scheduleReconnect(gen: reconnectGen, delay: 0.5)
+    }
+
+    /// Fire one reconnect attempt after `delay`, unless the sequence was cancelled
+    /// or auto-reconnect was turned off in the meantime.
+    private func scheduleReconnect(gen: Int, delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.reconnectGen == gen, self.autoReconnect,
+                  let dev = self.reconnectDevice else { return }
+            self.reconnectAttempts += 1
+            log("auto-reconnect attempt \(self.reconnectAttempts)/\(self.maxReconnectAttempts) → \(dev.displayName)")
+            self.controller.connect(dev, features: self.features, reconnect: true)
+        }
+    }
+
+    /// Stop any in-flight reconnect sequence and clear the overlay.
+    private func cancelReconnect() {
+        reconnectGen += 1
+        reconnectAttempts = 0
+        reconnectDevice = nil
+        mirrorLink = .live
+    }
     func startMirror() { controller.startMirror(maxSize: resolution.maxSize) }
     func stopMirror() { controller.stopMirror() }
     func forgetDevice() { lastDevice = nil; Store.lastDevice = nil }
@@ -171,10 +230,35 @@ final class AppModel: ObservableObject {
         controller.onState = { [weak self] st in
             guard let self else { return }
             self.state = st
-            if case .connected(let d) = st {
+            switch st {
+            case .connected(let d):
                 self.lastDevice = d
                 Store.lastDevice = d
+                if self.reconnectDevice != nil { log("auto-reconnect succeeded") }
+                self.cancelReconnect()
+                // Resume mirroring if the window is still open after a recovered drop.
+                if self.mirror.isShowing && !self.mirroring {
+                    self.controller.startMirror(maxSize: self.resolution.maxSize)
+                }
+            case .failed:
+                // A reconnect attempt failed: back off and retry, or give up.
+                guard self.reconnectDevice != nil else { break }
+                if self.autoReconnect, self.reconnectAttempts < self.maxReconnectAttempts {
+                    let backoff = min(8.0, pow(2.0, Double(self.reconnectAttempts - 1)))
+                    log("auto-reconnect retry in \(Int(backoff))s")
+                    self.scheduleReconnect(gen: self.reconnectGen, delay: backoff)
+                } else {
+                    log("auto-reconnect gave up after \(self.reconnectAttempts) attempts")
+                    let showing = self.mirror.isShowing
+                    self.cancelReconnect()
+                    self.mirrorLink = showing ? .lost : .live
+                }
+            default:
+                break
             }
+        }
+        controller.onConnectionLost = { [weak self] device in
+            self?.handleConnectionLost(device)
         }
         controller.onMirroring = { [weak self] on, layer in
             guard let self else { return }

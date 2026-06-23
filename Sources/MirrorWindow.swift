@@ -114,6 +114,68 @@ struct PrivacyOverlay: View {
     }
 }
 
+// MARK: - Reconnect overlay (shown when the link drops mid-mirror)
+
+/// Drives the reconnect overlay off `AppModel.mirrorLink`.
+final class LinkOverlayModel: ObservableObject {
+    @Published var link: MirrorLink = .live
+    var active: Bool { link != .live }
+}
+
+/// A frosted panel shown over the (frozen) picture while the connection is being
+/// re-established, or after it was lost and we're not reconnecting. Replaces a
+/// silently frozen frame with clear feedback.
+struct ReconnectOverlay: View {
+    @ObservedObject var model: LinkOverlayModel
+
+    var body: some View {
+        ZStack {
+            if model.active {
+                RoundedRectangle(cornerRadius: kCorner, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: kCorner, style: .continuous)
+                            .fill(Color.black.opacity(0.5))
+                    )
+                VStack(spacing: 16) {
+                    if model.link == .reconnecting {
+                        ProgressView()
+                            .controlSize(.large)
+                            .tint(.white)
+                        Text(L("正在重新连接…"))
+                    } else {
+                        Image(systemName: "wifi.slash")
+                            .font(.system(size: 40, weight: .semibold))
+                        Text(L("连接已断开"))
+                    }
+                }
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white.opacity(0.95))
+                .multilineTextAlignment(.center)
+                .padding(28)
+                .transition(.opacity)
+            }
+        }
+        .allowsHitTesting(model.active)
+        .animation(.easeInOut(duration: 0.2), value: model.active)
+        .animation(.easeInOut(duration: 0.2), value: model.link)
+    }
+}
+
+/// Stacks the privacy and reconnect overlays in the one overlay host (privacy on
+/// top — a secure screen takes precedence over a reconnect hint).
+struct MirrorOverlays: View {
+    @ObservedObject var privacy: PrivacyOverlayModel
+    @ObservedObject var link: LinkOverlayModel
+
+    var body: some View {
+        ZStack {
+            ReconnectOverlay(model: link)
+            PrivacyOverlay(model: privacy)
+        }
+    }
+}
+
 // MARK: - AppKit container (fixed window; grows a frame LAYER around a fixed screen)
 
 /// The window's content view. The OS window is FIXED at the grown size and never resizes
@@ -658,10 +720,15 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
     private var video: MirrorInputView?
     private let chromeProgress = ChromeProgress()
     private let privacyOverlay = PrivacyOverlayModel()
+    private let linkOverlay = LinkOverlayModel()
     private var bag = Set<AnyCancellable>()
     private var baseScreenH: CGFloat = 640   // screen height in points; window = screen + chrome
 
     init(model: AppModel) { self.model = model }
+
+    /// Whether the mirror window is currently open (used to decide whether to resume
+    /// mirroring after an auto-reconnect, and whether to show the reconnect overlay).
+    var isShowing: Bool { window != nil }
 
     func show(connect: Bool = true) {
         NSApp.setActivationPolicy(.regular)  // Dock icon + Cmd-Tab while the mirror is up
@@ -697,7 +764,7 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
             onKey: { [weak self] code in self?.model.key(code) }
         ))
 
-        let overlayHost = NSHostingView(rootView: PrivacyOverlay(model: privacyOverlay))
+        let overlayHost = NSHostingView(rootView: MirrorOverlays(privacy: privacyOverlay, link: linkOverlay))
         overlayHost.layer?.backgroundColor = .clear
 
         let container = MirrorContainerView(video: video, chromeHost: chromeHost, overlayHost: overlayHost, progress: chromeProgress)
@@ -731,6 +798,10 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         model.$privacyState
             .receive(on: RunLoop.main)
             .sink { [weak self] tok in self?.privacyOverlay.kind = tok }
+            .store(in: &bag)
+        model.$mirrorLink
+            .receive(on: RunLoop.main)
+            .sink { [weak self] link in self?.linkOverlay.link = link }
             .store(in: &bag)
         // Phone caret → place the IME there (mapped to view coords in firstRect).
         model.imeCursorSink = { [weak self] p in self?.video?.imeAnchorVideo = p }
