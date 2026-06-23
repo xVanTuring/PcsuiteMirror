@@ -12,6 +12,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var videoSize: CGSize = .zero
     @Published private(set) var frameCount = 0
     @Published private(set) var lastCode: String?
+    /// Phone-reported secure-screen token ("" / "clear" = none; "password",
+    /// "safety", "lockScreen" = a privacy screen the phone handles itself).
+    @Published private(set) var privacyState: String = ""
 
     // Persisted preferences (default ON).
     @Published var autoReconnect: Bool { didSet { Store.autoReconnect = autoReconnect } }
@@ -24,6 +27,14 @@ final class AppModel: ObservableObject {
 
     private let controller = SessionController()
     private lazy var mirror = MirrorWindowManager(model: self)
+
+    /// Set by the mirror window: receives the phone's caret position (mirror
+    /// pixel space) or nil when no field is focused. Plain closure (not
+    /// @Published) so high-frequency caret updates don't churn SwiftUI.
+    var imeCursorSink: ((CGPoint?) -> Void)?
+    /// Set by the mirror window: whether the phone has a focused text field, so
+    /// the keyboard only types in input mode.
+    var imeActiveSink: ((Bool) -> Void)?
 
     init() {
         autoReconnect = Store.autoReconnect
@@ -146,6 +157,13 @@ final class AppModel: ObservableObject {
     }
     /// Press an Android navigation key (see `AndroidKey`).
     func key(_ keycode: Int) { controller.sendKey(keycode) }
+    /// Type Unicode text into the phone's focused field.
+    func typeText(_ s: String) { controller.sendText(s) }
+    /// Backspace (delete one char before the cursor).
+    func backspace() { controller.sendDeleteSurrounding(before: 1, after: 0) }
+
+    /// Whether the phone is currently showing a secure/privacy screen.
+    var privacyActive: Bool { !privacyState.isEmpty && privacyState != "clear" }
 
     // MARK: - Controller wiring (callbacks arrive on main)
 
@@ -162,7 +180,17 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             self.mirroring = on
             self.displayLayer = layer
-            if !on { self.frameCount = 0; self.videoSize = .zero }
+            if !on { self.frameCount = 0; self.videoSize = .zero; self.privacyState = "" }
+        }
+        controller.onPrivacy = { [weak self] tok in self?.privacyState = tok }
+        controller.onInputState = { [weak self] active, hasCaret, x, y in
+            guard let self else { return }
+            self.imeActiveSink?(active)        // gate the keyboard on input mode
+            if !active {
+                self.imeCursorSink?(nil)       // field gone → fall back to pointer
+            } else if hasCaret {
+                self.imeCursorSink?(CGPoint(x: x, y: y))
+            }
         }
         controller.onFrameCount = { [weak self] c in self?.frameCount = c }
         controller.onFormat = { [weak self] w, h in

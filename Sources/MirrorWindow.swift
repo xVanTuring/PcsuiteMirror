@@ -64,6 +64,56 @@ struct MirrorChromeView: View {
     }
 }
 
+// MARK: - Privacy overlay (shown over the picture when the phone hits a secure screen)
+
+/// Drives the privacy overlay. `kind` is the phone's `privacyState` token.
+final class PrivacyOverlayModel: ObservableObject {
+    @Published var kind: String = ""   // "" / "clear" = hidden
+    var active: Bool { !kind.isEmpty && kind != "clear" }
+}
+
+/// A frosted panel covering the picture while the phone shows a secure surface
+/// (fingerprint / password / lock screen). The phone stops streaming then, so
+/// this replaces the frozen / black picture with a clear instruction.
+struct PrivacyOverlay: View {
+    @ObservedObject var model: PrivacyOverlayModel
+
+    private var symbol: String {
+        switch model.kind {
+        case "lockScreen": return "lock.fill"
+        case "password": return "rectangle.and.pencil.and.ellipsis"
+        default: return "lock.shield.fill"   // "safety" / fingerprint / secure
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            if model.active {
+                RoundedRectangle(cornerRadius: kCorner, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: kCorner, style: .continuous)
+                            .fill(Color.black.opacity(0.45))
+                    )
+                VStack(spacing: 14) {
+                    Image(systemName: symbol)
+                        .font(.system(size: 40, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.95))
+                    Text(L("隐私操作请在手机端处理"))
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(28)
+                .transition(.opacity)
+            }
+        }
+        .allowsHitTesting(model.active)   // block stray clicks only while secure
+        .animation(.easeInOut(duration: 0.2), value: model.active)
+    }
+}
+
 // MARK: - AppKit container (fixed window; grows a frame LAYER around a fixed screen)
 
 /// The window's content view. The OS window is FIXED at the grown size and never resizes
@@ -75,6 +125,7 @@ struct MirrorChromeView: View {
 final class MirrorContainerView: NSView {
     let video: MirrorInputView
     private let chromeHost: NSView
+    private let overlayHost: NSView
     private let chromeProgress: ChromeProgress
     private let frameLayer = CALayer()
 
@@ -85,9 +136,10 @@ final class MirrorContainerView: NSView {
     private var tracking: NSTrackingArea?
     private var animTimer: Timer?
 
-    init(video: MirrorInputView, chromeHost: NSView, progress: ChromeProgress) {
+    init(video: MirrorInputView, chromeHost: NSView, overlayHost: NSView, progress: ChromeProgress) {
         self.video = video
         self.chromeHost = chromeHost
+        self.overlayHost = overlayHost
         self.chromeProgress = progress
         super.init(frame: .zero)
         wantsLayer = true
@@ -96,7 +148,9 @@ final class MirrorContainerView: NSView {
         frameLayer.cornerCurve = .continuous
         layer?.addSublayer(frameLayer)         // behind the subviews
         addSubview(chromeHost)                 // bars (in the margins)
-        addSubview(video)                      // the picture (centre), on top
+        addSubview(video)                      // the picture (centre)
+        overlayHost.wantsLayer = true
+        addSubview(overlayHost)                // privacy overlay, above the picture
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
@@ -157,11 +211,11 @@ final class MirrorContainerView: NSView {
     private func layoutContent() {
         chromeHost.frame = bounds
         withoutImplicitAnimation {
-            if screenSize.width > 1 {
-                video.frame = NSRect(x: kInset, y: kNav, width: screenSize.width, height: screenSize.height)
-            } else {
-                video.frame = bounds
-            }
+            let videoRect = screenSize.width > 1
+                ? NSRect(x: kInset, y: kNav, width: screenSize.width, height: screenSize.height)
+                : bounds
+            video.frame = videoRect
+            overlayHost.frame = videoRect   // privacy panel covers the picture
         }
     }
 
@@ -265,6 +319,25 @@ final class MirrorInputView: NSView {
     var videoSize: CGSize = .zero
     var onMouse: ((UInt8, UInt8, Int, Int, Int, Int) -> Void)?
     var onScroll: ((Int, Int, Int, Int, Int) -> Void)?
+    /// Committed Unicode text from the keyboard (IME `commitText` on the phone).
+    var onText: ((String) -> Void)?
+    /// A special key as an Android `KEYCODE_*` value (Enter/Tab/arrows/Esc).
+    var onKeyCode: ((Int) -> Void)?
+    /// Backspace (delete one char before the cursor).
+    var onBackspace: (() -> Void)?
+    /// Phone caret position (mirror pixel space, top-left origin) for the IME;
+    /// nil falls back to the pointer location.
+    var imeAnchorVideo: CGPoint?
+    /// Whether the phone currently has a focused text field. The keyboard only
+    /// types to the phone while this is true.
+    var phoneInputActive = false
+
+    // Touch-style pointer: the system arrow is hidden over the picture and replaced
+    // by a soft translucent disc that follows the pointer and ripples on click.
+    private let cursorLayer = CALayer()
+    private var tracking: NSTrackingArea?
+    private var scrollAccum: CGFloat = 0   // trackpad scroll accumulator (points)
+    private var lastPoint: CGPoint = .zero // last pointer location (anchors the IME)
 
     init(_ l: AVSampleBufferDisplayLayer) {
         hostedLayer = l
@@ -277,10 +350,111 @@ final class MirrorInputView: NSView {
         // mask on the root are what actually clip the picture to rounded corners.
         Self.round(l)
         root.addSublayer(l)
+        Self.styleCursor(cursorLayer)
+        root.addSublayer(cursorLayer)
         root.mask = maskLayer
         layer = root
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    // MARK: Touch-style cursor
+
+    private static let cursorSize: CGFloat = 24
+
+    /// A dual-tone disc that stays visible on any background: a dark outer ring
+    /// (reads on light/white screens) wrapping a bright inner ring + faint fill
+    /// (reads on dark screens), plus a soft shadow for separation.
+    private static func styleCursor(_ c: CALayer) {
+        let s = cursorSize
+        c.bounds = CGRect(x: 0, y: 0, width: s, height: s)
+        c.backgroundColor = NSColor.clear.cgColor
+        c.zPosition = 100          // stays above any later-added video layer
+        c.isHidden = true
+
+        let inner = CGRect(x: 2, y: 2, width: s - 4, height: s - 4)
+
+        let fill = CALayer()
+        fill.frame = inner
+        fill.cornerRadius = inner.width / 2
+        fill.backgroundColor = NSColor(white: 0.5, alpha: 0.22).cgColor
+        c.addSublayer(fill)
+
+        let dark = CALayer()           // dark outer ring → visible on light bg
+        dark.frame = c.bounds
+        dark.cornerRadius = s / 2
+        dark.borderColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        dark.borderWidth = 3
+        dark.shadowColor = NSColor.black.cgColor
+        dark.shadowOpacity = 0.35
+        dark.shadowRadius = 3
+        dark.shadowOffset = .zero
+        c.addSublayer(dark)
+
+        let light = CALayer()          // bright inner ring → visible on dark bg
+        light.frame = inner
+        light.cornerRadius = inner.width / 2
+        light.borderColor = NSColor.white.withAlphaComponent(0.95).cgColor
+        light.borderWidth = 2
+        c.addSublayer(light)
+    }
+
+    /// A fully transparent cursor so only our drawn disc shows over the picture.
+    private static let blankCursor: NSCursor = NSCursor(image: NSImage(size: NSSize(width: 1, height: 1)), hotSpot: .zero)
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: Self.blankCursor) }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = tracking { removeTrackingArea(t) }
+        let t = NSTrackingArea(
+            rect: .zero,
+            options: [.activeInKeyWindow, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
+            owner: self, userInfo: nil
+        )
+        addTrackingArea(t)
+        tracking = t
+    }
+
+    override func mouseEntered(with e: NSEvent) { cursorLayer.isHidden = false; moveCursor(e) }
+    override func mouseExited(with e: NSEvent) { cursorLayer.isHidden = true }
+    override func mouseMoved(with e: NSEvent) { moveCursor(e) }
+
+    private func moveCursor(_ e: NSEvent) {
+        let p = loc(e)
+        lastPoint = p
+        withoutImplicitAnimation {
+            cursorLayer.position = p
+            cursorLayer.isHidden = false
+        }
+    }
+
+    private func withoutImplicitAnimation(_ body: () -> Void) {
+        CATransaction.begin(); CATransaction.setDisableActions(true); body(); CATransaction.commit()
+    }
+
+    /// A quick press feedback: the disc shrinks-then-settles and an expanding ring
+    /// fades out from the touch point.
+    private func tapFeedback(at p: CGPoint) {
+        let pop = CABasicAnimation(keyPath: "transform.scale")
+        pop.fromValue = 0.62; pop.toValue = 1.0; pop.duration = 0.35
+        pop.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        cursorLayer.add(pop, forKey: "tap")
+
+        let ring = CALayer()
+        ring.frame = CGRect(x: 0, y: 0, width: Self.cursorSize, height: Self.cursorSize)
+        ring.position = p
+        ring.cornerRadius = Self.cursorSize / 2
+        ring.borderColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        ring.borderWidth = 2
+        ring.zPosition = 99
+        layer?.addSublayer(ring)
+        let grow = CABasicAnimation(keyPath: "transform.scale"); grow.fromValue = 0.7; grow.toValue = 2.3
+        let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0.9; fade.toValue = 0
+        let g = CAAnimationGroup(); g.animations = [grow, fade]; g.duration = 0.42
+        g.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        ring.add(g, forKey: "ripple")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) { [weak ring] in ring?.removeFromSuperlayer() }
+    }
 
     private static func round(_ l: CALayer) {
         l.cornerRadius = kCorner
@@ -293,6 +467,9 @@ final class MirrorInputView: NSView {
         Self.round(l)
         hostedLayer = l
         layer?.addSublayer(l)
+        // Keep the touch cursor above the freshly added video layer.
+        cursorLayer.removeFromSuperlayer()
+        layer?.addSublayer(cursorLayer)
         needsLayout = true
     }
 
@@ -306,28 +483,41 @@ final class MirrorInputView: NSView {
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var acceptsFirstResponder: Bool { true }
 
     /// Map a point (view coords, bottom-left origin) into the aspect-fit video rect,
     /// then to phone pixel coords (top-left origin). nil if on the letterbox.
-    private func map(_ p: CGPoint) -> (Int, Int, Int, Int)? {
+    /// The aspect-fit rectangle (view coords) where the picture is actually drawn.
+    private func fitRect() -> CGRect? {
         guard videoSize.width > 0, videoSize.height > 0,
               bounds.width > 0, bounds.height > 0 else { return nil }
         let vidAR = videoSize.width / videoSize.height
         let viewAR = bounds.width / bounds.height
-        let rect: CGRect
         if vidAR > viewAR {
             let h = bounds.width / vidAR
-            rect = CGRect(x: 0, y: (bounds.height - h) / 2, width: bounds.width, height: h)
+            return CGRect(x: 0, y: (bounds.height - h) / 2, width: bounds.width, height: h)
         } else {
             let w = bounds.height * vidAR
-            rect = CGRect(x: (bounds.width - w) / 2, y: 0, width: w, height: bounds.height)
+            return CGRect(x: (bounds.width - w) / 2, y: 0, width: w, height: bounds.height)
         }
-        guard rect.contains(p) else { return nil }
+    }
+
+    private func map(_ p: CGPoint) -> (Int, Int, Int, Int)? {
+        guard let rect = fitRect(), rect.contains(p) else { return nil }
         let nx = (p.x - rect.minX) / rect.width
         let ny = (p.y - rect.minY) / rect.height
         let vx = Int((nx * videoSize.width).rounded())
         let vy = Int(((1 - ny) * videoSize.height).rounded()) // flip y to top-left origin
         return (vx, vy, Int(videoSize.width), Int(videoSize.height))
+    }
+
+    /// Inverse of `map`: a phone caret point (mirror px, top-left) → view point.
+    private func videoToView(_ p: CGPoint) -> CGPoint? {
+        guard let rect = fitRect() else { return nil }
+        let fx = min(max(p.x / videoSize.width, 0), 1)
+        let fy = min(max(p.y / videoSize.height, 0), 1)
+        return CGPoint(x: rect.minX + fx * rect.width,
+                       y: rect.minY + (1 - fy) * rect.height) // flip y to bottom-left
     }
 
     private func loc(_ e: NSEvent) -> CGPoint { convert(e.locationInWindow, from: nil) }
@@ -337,16 +527,118 @@ final class MirrorInputView: NSView {
         onMouse?(action, button, m.0, m.1, m.2, m.3)
     }
 
-    override func mouseDown(with e: NSEvent) { send(0, 1, e) }
-    override func mouseDragged(with e: NSEvent) { send(2, 1, e) }
-    override func mouseUp(with e: NSEvent) { send(1, 1, e) }
-    override func rightMouseDown(with e: NSEvent) { send(0, 2, e) }
-    override func rightMouseDragged(with e: NSEvent) { send(2, 2, e) }
-    override func rightMouseUp(with e: NSEvent) { send(1, 2, e) }
+    override func mouseDown(with e: NSEvent) { moveCursor(e); tapFeedback(at: loc(e)); send(0, 1, e) }
+    override func mouseDragged(with e: NSEvent) { moveCursor(e); send(2, 1, e) }
+    override func mouseUp(with e: NSEvent) { moveCursor(e); send(1, 1, e) }
+    override func rightMouseDown(with e: NSEvent) { moveCursor(e); send(0, 2, e) }
+    override func rightMouseDragged(with e: NSEvent) { moveCursor(e); send(2, 2, e) }
+    override func rightMouseUp(with e: NSEvent) { moveCursor(e); send(1, 2, e) }
 
+    /// Trackpad scrolling is far finer-grained than a wheel notch — emitting one
+    /// phone scroll per event makes it hyper-sensitive. Accumulate the precise
+    /// delta and emit a tick only once it crosses a threshold; a wheel mouse
+    /// (coarse, line-based deltas) still emits one tick per notch.
     override func scrollWheel(with e: NSEvent) {
-        guard e.scrollingDeltaY != 0, let m = map(loc(e)) else { return }
-        onScroll?(e.scrollingDeltaY > 0 ? 1 : -1, m.0, m.1, m.2, m.3)
+        guard let m = map(loc(e)) else { return }
+        if e.hasPreciseScrollingDeltas {
+            scrollAccum += e.scrollingDeltaY
+            let threshold: CGFloat = 22   // points of finger travel per phone scroll tick
+            while abs(scrollAccum) >= threshold {
+                let dir = scrollAccum > 0 ? 1 : -1
+                onScroll?(dir, m.0, m.1, m.2, m.3)
+                scrollAccum -= CGFloat(dir) * threshold
+            }
+            if e.phase == .ended || e.phase == .cancelled || e.momentumPhase == .ended {
+                scrollAccum = 0
+            }
+        } else if e.scrollingDeltaY != 0 {
+            onScroll?(e.scrollingDeltaY > 0 ? 1 : -1, m.0, m.1, m.2, m.3)
+        }
+    }
+
+    // MARK: Keyboard → phone
+
+    // Pinyin/kana/etc. in-progress composition (shown in the macOS candidate
+    // window; nothing is sent to the phone until the IME commits final text).
+    private var markedText = ""
+
+    override func keyDown(with e: NSEvent) {
+        let flags = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // Leave ⌘/⌃ chords to the system (menu shortcuts, etc.); don't beep.
+        if flags.contains(.command) || flags.contains(.control) { return }
+        // Type only when the phone is in input mode (a field is focused);
+        // otherwise swallow the key so stray typing never reaches the phone.
+        guard phoneInputActive else { return }
+
+        // While composing (IME candidate up), every key belongs to the IME.
+        if !hasMarkedText() {
+            // Special keys → Android KEYCODE_* (so they act like hardware keys).
+            switch e.keyCode {
+            case 51:        onBackspace?(); return              // Delete (backspace)
+            case 36, 76:    onKeyCode?(66); return              // Return / Enter → ENTER
+            case 48:        onKeyCode?(61); return              // Tab → TAB
+            case 53:        onKeyCode?(4);  return              // Esc → BACK
+            case 117:       onKeyCode?(112); return             // Fwd Delete → FORWARD_DEL
+            case 123:       onKeyCode?(21); return              // ← DPAD_LEFT
+            case 124:       onKeyCode?(22); return              // → DPAD_RIGHT
+            case 125:       onKeyCode?(20); return              // ↓ DPAD_DOWN
+            case 126:       onKeyCode?(19); return              // ↑ DPAD_UP
+            default: break
+            }
+        }
+        // Route through the active input method: latin keys arrive via
+        // insertText, CJK/emoji composition via setMarkedText then insertText.
+        _ = inputContext?.handleEvent(e)
+    }
+
+    // Consume key-ups so they don't ring the system bell at the responder chain end.
+    override func keyUp(with e: NSEvent) {}
+
+    // Swallow editing selectors the IME emits for keys we don't model, so the
+    // responder chain doesn't end in a system beep.
+    override func doCommand(by selector: Selector) {}
+}
+
+// MARK: - IME text input (so Chinese / Japanese / emoji compose correctly)
+
+extension MirrorInputView: NSTextInputClient {
+    private func asString(_ any: Any) -> String {
+        (any as? String) ?? (any as? NSAttributedString)?.string ?? ""
+    }
+
+    func insertText(_ string: Any, replacementRange: NSRange) {
+        markedText = ""
+        let s = asString(string)
+        if !s.isEmpty { onText?(s) }   // committed text → commit on the phone
+    }
+
+    func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        markedText = asString(string)   // still composing; not sent yet
+    }
+
+    func unmarkText() { markedText = "" }
+    func hasMarkedText() -> Bool { !markedText.isEmpty }
+    func markedRange() -> NSRange {
+        markedText.isEmpty ? NSRange(location: NSNotFound, length: 0)
+                           : NSRange(location: 0, length: markedText.utf16.count)
+    }
+    func selectedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
+    func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? { nil }
+    func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
+    func characterIndex(for point: NSPoint) -> Int { 0 }
+
+    /// Anchor the IME candidate window at the phone's reported caret (mapped into
+    /// view coords); fall back to the last tap location if no caret is known.
+    func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        guard let w = window else { return .zero }
+        let p: CGPoint
+        if let a = imeAnchorVideo, let v = videoToView(a) {
+            p = v
+        } else {
+            p = (lastPoint == .zero) ? CGPoint(x: bounds.midX, y: bounds.midY) : lastPoint
+        }
+        let inWindow = convert(p, to: nil)
+        return w.convertToScreen(NSRect(origin: inWindow, size: CGSize(width: 1, height: 1)))
     }
 }
 
@@ -365,6 +657,7 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
     private var container: MirrorContainerView?
     private var video: MirrorInputView?
     private let chromeProgress = ChromeProgress()
+    private let privacyOverlay = PrivacyOverlayModel()
     private var bag = Set<AnyCancellable>()
     private var baseScreenH: CGFloat = 640   // screen height in points; window = screen + chrome
 
@@ -392,6 +685,9 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         video.videoSize = model.videoSize
         video.onMouse = { [weak self] a, b, x, y, w, h in self?.model.mouse(action: a, button: b, x: x, y: y, w: w, h: h) }
         video.onScroll = { [weak self] v, x, y, w, h in self?.model.scroll(v: v, x: x, y: y, w: w, h: h) }
+        video.onText = { [weak self] s in self?.model.typeText(s) }
+        video.onKeyCode = { [weak self] code in self?.model.key(code) }
+        video.onBackspace = { [weak self] in self?.model.backspace() }
 
         let chromeHost = NSHostingView(rootView: MirrorChromeView(
             progress: chromeProgress,
@@ -401,13 +697,17 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
             onKey: { [weak self] code in self?.model.key(code) }
         ))
 
-        let container = MirrorContainerView(video: video, chromeHost: chromeHost, progress: chromeProgress)
+        let overlayHost = NSHostingView(rootView: PrivacyOverlay(model: privacyOverlay))
+        overlayHost.layer?.backgroundColor = .clear
+
+        let container = MirrorContainerView(video: video, chromeHost: chromeHost, overlayHost: overlayHost, progress: chromeProgress)
         container.onHover = { [weak self] hovering in self?.container?.setProgress(hovering ? 1 : 0, animated: true) }
 
         w.contentView = container
         w.isOpaque = false
         w.backgroundColor = .clear
         w.hasShadow = true    // real native shadow; we invalidate it per-frame as the frame grows
+        w.acceptsMouseMovedEvents = true   // so the touch-style cursor can follow the pointer
         w.isMovableByWindowBackground = false
         w.minSize = NSSize(width: 240, height: 420)
         w.isReleasedWhenClosed = false
@@ -428,10 +728,19 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] sz in self?.applyAspect(sz) }
             .store(in: &bag)
+        model.$privacyState
+            .receive(on: RunLoop.main)
+            .sink { [weak self] tok in self?.privacyOverlay.kind = tok }
+            .store(in: &bag)
+        // Phone caret → place the IME there (mapped to view coords in firstRect).
+        model.imeCursorSink = { [weak self] p in self?.video?.imeAnchorVideo = p }
+        // Phone input mode → gate the keyboard (only type when a field is focused).
+        model.imeActiveSink = { [weak self] on in self?.video?.phoneInputActive = on }
 
         applyAspect(model.videoSize)
         if connect { model.startMirror() }
         w.makeKeyAndOrderFront(nil)
+        w.makeFirstResponder(video)   // keyboard goes to the picture
         NSApp.activate(ignoringOtherApps: true)
         log("mirror window number: \(w.windowNumber)")
     }
@@ -476,6 +785,8 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         testTimer?.invalidate(); testTimer = nil
         bag.removeAll()
+        model.imeCursorSink = nil
+        model.imeActiveSink = nil
         model.stopMirror()
         window = nil; container = nil; video = nil
         NSApp.setActivationPolicy(.accessory) // back to menu-bar agent

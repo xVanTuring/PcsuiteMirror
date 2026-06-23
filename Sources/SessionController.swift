@@ -39,6 +39,14 @@ final class SessionController {
     var onFrameCount: ((Int) -> Void)?
     var onFormat: ((Int, Int) -> Void)?
     var onVerifyCode: ((String) -> Void)?
+    /// Privacy / secure-screen state token ("clear" / "password" / "safety" /
+    /// "lockScreen"). Delivered on the main queue while mirroring.
+    var onPrivacy: ((String) -> Void)?
+    /// Phone IME state, delivered on the main queue while mirroring:
+    /// `(active, hasCaret, caretX, caretY)`. `active` = a text field is focused
+    /// (so the keyboard should type); `caret*` is the on-device caret in mirror
+    /// pixel space when `hasCaret` is true.
+    var onInputState: ((Bool, Bool, Double, Double) -> Void)?
 
     private let queue = DispatchQueue(label: "com.pcsuite.session")
     private let inputQueue = DispatchQueue(label: "com.pcsuite.input")
@@ -51,6 +59,12 @@ final class SessionController {
 
     private var verifyDone: DispatchSemaphore?
     private var frameDone: DispatchSemaphore?
+    private var privacyDone: DispatchSemaphore?
+    private var cursorDone: DispatchSemaphore?
+
+    // True while the phone reports a secure/privacy screen (touched on `queue`).
+    // The phone stops the video then, so we suppress black-screen recovery.
+    private var privacyActive = false
 
     // Black-screen recovery (touched on `queue`). If a freshly started stream delivers
     // no frame within a few seconds — the phone's screen service didn't fully reset
@@ -188,6 +202,49 @@ final class SessionController {
                 pump.name = "frame-pump"
                 pump.stackSize = 4 << 20
                 pump.start()
+
+                // Privacy / secure-screen poller. The phone stops the video when
+                // it shows a secure surface (fingerprint, password, lock screen)
+                // and pushes a state token; the UI shows a "handle on phone" hint.
+                privacyActive = false
+                let pdone = DispatchSemaphore(value: 0)
+                privacyDone = pdone
+                let privacyPump = Thread { [weak self] in
+                    while true {
+                        let tok = sc.next_privacy_event().toString()
+                        if tok.isEmpty { break }     // stopped or stream ended
+                        let active = (tok != "clear")
+                        self?.queue.async { self?.privacyActive = active }
+                        self?.emit { self?.onPrivacy?(tok) }
+                    }
+                    pdone.signal()
+                }
+                privacyPump.name = "privacy-pump"
+                privacyPump.start()
+
+                // IME caret poller: the phone reports the focused field's caret
+                // position so the PC can place its candidate window there.
+                let cdone = DispatchSemaphore(value: 0)
+                cursorDone = cdone
+                let cursorPump = Thread { [weak self] in
+                    while true {
+                        let s = sc.next_input_cursor().toString()
+                        if s.isEmpty { break }       // stopped or stream ended
+                        switch s {
+                        case "on":  self?.emit { self?.onInputState?(true, false, 0, 0) }
+                        case "off": self?.emit { self?.onInputState?(false, false, 0, 0) }
+                        default:
+                            let p = s.split(separator: ",")
+                            if p.count == 2, let x = Double(p[0]), let y = Double(p[1]) {
+                                self?.emit { self?.onInputState?(true, true, x, y) }
+                            }
+                        }
+                    }
+                    cdone.signal()
+                }
+                cursorPump.name = "ime-cursor-pump"
+                cursorPump.start()
+
                 emitMirroring(true, f.layer)
                 scheduleMirrorWatchdog(gen: gen, maxSize: maxSize)
                 log("mirroring ✓")
@@ -204,7 +261,8 @@ final class SessionController {
     private func scheduleMirrorWatchdog(gen: Int, maxSize: Int64) {
         queue.asyncAfter(deadline: .now() + mirrorRecoverDelay) { [weak self] in
             guard let self,
-                  self.mirrorGen == gen, self.screen != nil, !self.firstFrameSeen
+                  self.mirrorGen == gen, self.screen != nil, !self.firstFrameSeen,
+                  !self.privacyActive  // black screen is expected during a secure screen
             else { return }
             guard self.mirrorRecoveries < self.mirrorRecoverMax else {
                 log("mirror still black after \(self.mirrorRecoveries) recoveries; leaving as-is")
@@ -223,9 +281,14 @@ final class SessionController {
 
     private func stopMirrorLocked() {
         guard let sc = screen, let done = frameDone else { return }
-        sc.stop()
+        sc.stop()                       // unblocks the frame, privacy and IME pumps
         done.wait()                     // block until the frame pump exits
+        privacyDone?.wait()             // and the privacy pump
+        cursorDone?.wait()              // and the IME-caret pump
         frameDone = nil
+        privacyDone = nil
+        cursorDone = nil
+        privacyActive = false
         screen = nil
         feeder = nil
         emitMirroring(false, nil)
@@ -273,6 +336,22 @@ final class SessionController {
         inputQueue.async { [self] in
             guard let s = snapshotSession() else { return }
             _ = s.key(Int64(keycode))
+        }
+    }
+
+    /// Commit typed `text` into the phone's focused input field (Unicode-safe).
+    func sendText(_ text: String) {
+        inputQueue.async { [self] in
+            guard let s = snapshotSession() else { return }
+            _ = s.text(text)
+        }
+    }
+
+    /// Delete `before` chars before / `after` chars after the cursor (Backspace).
+    func sendDeleteSurrounding(before: Int, after: Int) {
+        inputQueue.async { [self] in
+            guard let s = snapshotSession() else { return }
+            _ = s.delete_surrounding(Int64(before), Int64(after))
         }
     }
 
