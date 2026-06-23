@@ -1,0 +1,52 @@
+/* status */
+"Disconnected" = "Disconnected";
+"Connecting…" = "Connecting…";
+"Reconnecting…" = "Reconnecting…";
+"Connected" = "Connected";
+"Connection failed" = "Connection failed";
+
+/* transport labels */
+"via USB" = "USB";
+"via Wi-Fi" = "Wi‑Fi";
+
+/* connect actions */
+"Connect via USB" = "Connect via USB";
+"Connect over Wi-Fi…" = "Connect over Wi-Fi…";
+"Connect over Wi-Fi" = "Connect over Wi-Fi";
+"Enter the phone's IP address" = "Enter the phone's IP address";
+"Clipboard direction" = "Clipboard direction";
+"Phone IP" = "Phone IP";
+"Connect" = "Connect";
+"Reconnect" = "Reconnect";
+"Cancel" = "Cancel";
+"Disconnect" = "Disconnect";
+
+/* mirroring */
+"Start mirroring" = "Start mirroring";
+"Stop mirroring" = "Stop mirroring";
+"Mirror" = "Mirror";
+"Starting mirror…" = "Starting mirror…";
+
+/* options */
+"Auto-reconnect last device" = "Auto-reconnect last device";
+"Clipboard sync" = "Clipboard sync";
+"Verify-code relay" = "Verify-code relay";
+"Feature changes apply after reconnect" = "Clipboard / verify changes apply after reconnect";
+"Forget device" = "Forget device";
+
+/* clipboard direction */
+"Two-way" = "Two-way";
+"Mac → phone only" = "Mac → phone only";
+"Phone → Mac only" = "Phone → Mac only";
+
+/* mirror resolution */
+"Mirror resolution" = "Mirror resolution";
+"High (full)" = "High (full)";
+"Medium (1280)" = "Medium (1280)";
+"Low (720)" = "Low (720)";
+"Last code" = "Last code";
+"Quit" = "Quit";
+
+/* verify-code notification */
+"Verification code" = "Verification code";
+"%@ copied to clipboard" = "%@ copied to clipboard";

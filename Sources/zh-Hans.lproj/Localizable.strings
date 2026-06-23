@@ -1,0 +1,52 @@
+/* status */
+"Disconnected" = "未连接";
+"Connecting…" = "正在连接…";
+"Reconnecting…" = "正在重连…";
+"Connected" = "已连接";
+"Connection failed" = "连接失败";
+
+/* transport labels */
+"via USB" = "USB";
+"via Wi-Fi" = "无线";
+
+/* connect actions */
+"Connect via USB" = "通过 USB 连接";
+"Connect over Wi-Fi…" = "无线连接…";
+"Connect over Wi-Fi" = "无线连接";
+"Enter the phone's IP address" = "输入手机的 IP 地址";
+"Clipboard direction" = "剪贴板方向";
+"Phone IP" = "手机 IP";
+"Connect" = "连接";
+"Reconnect" = "重连";
+"Cancel" = "取消";
+"Disconnect" = "断开连接";
+
+/* mirroring */
+"Start mirroring" = "开始投屏";
+"Stop mirroring" = "停止投屏";
+"Mirror" = "投屏";
+"Starting mirror…" = "正在开始投屏…";
+
+/* options */
+"Auto-reconnect last device" = "自动重连上次设备";
+"Clipboard sync" = "剪贴板同步";
+"Verify-code relay" = "验证码接力";
+"Feature changes apply after reconnect" = "剪贴板 / 验证码改动将在重新连接后生效";
+"Forget device" = "忘记设备";
+
+/* clipboard direction */
+"Two-way" = "双向同步";
+"Mac → phone only" = "仅 Mac → 手机";
+"Phone → Mac only" = "仅 手机 → Mac";
+
+/* mirror resolution */
+"Mirror resolution" = "投屏分辨率";
+"High (full)" = "高（原始）";
+"Medium (1280)" = "中（1280）";
+"Low (720)" = "低（720）";
+"Last code" = "最近验证码";
+"Quit" = "退出";
+
+/* verify-code notification */
+"Verification code" = "验证码";
+"%@ copied to clipboard" = "%@ 已复制到剪贴板";

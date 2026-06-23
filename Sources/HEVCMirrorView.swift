@@ -70,8 +70,11 @@ final class HEVCFeeder {
         }
         if status == noErr, let fmt {
             format = fmt
-            let d = CMVideoFormatDescriptionGetDimensions(fmt)
-            onFormat?(Int(d.width), Int(d.height))
+            // Use the *presentation* (clean-aperture) size, not the coded size: when the
+            // encoder pads to a block multiple, the coded width/height carries extra edge
+            // pixels that would show as a black bar if we sized the window to them.
+            let d = CMVideoFormatDescriptionGetPresentationDimensions(fmt, usePixelAspectRatio: true, useCleanAperture: true)
+            onFormat?(Int(d.width.rounded()), Int(d.height.rounded()))
         } else {
             log("format description failed: \(status)")
         }
@@ -143,29 +146,4 @@ final class HEVCFeeder {
         }
         return sb
     }
-}
-
-/// Hosts the display layer in an NSView and keeps it sized to the view.
-final class DisplayHostView: NSView {
-    let displayLayer: AVSampleBufferDisplayLayer
-    init(_ l: AVSampleBufferDisplayLayer) {
-        self.displayLayer = l
-        super.init(frame: .zero)
-        wantsLayer = true
-        let root = CALayer()
-        root.backgroundColor = NSColor.black.cgColor
-        root.addSublayer(l)
-        layer = root
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
-    override func layout() {
-        super.layout()
-        displayLayer.frame = bounds
-    }
-}
-
-struct MirrorView: NSViewRepresentable {
-    let layer: AVSampleBufferDisplayLayer
-    func makeNSView(context: Context) -> DisplayHostView { DisplayHostView(layer) }
-    func updateNSView(_ nsView: DisplayHostView, context: Context) {}
 }

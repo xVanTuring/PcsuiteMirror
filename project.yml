@@ -1,6 +1,7 @@
 name: PcsuiteMirror
 options:
-  bundleIdPrefix: com.pcsuite
+  bundleIdPrefix: tech.xvanturing
+  developmentLanguage: en
   deploymentTarget:
     macOS: "13.0"
 settings:
@@ -23,7 +24,9 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: "YES"
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
-        PRODUCT_BUNDLE_IDENTIFIER: com.pcsuite.mirror
+        # Menu-bar agent: no Dock icon, no app-switcher entry (even before AppDelegate runs).
+        INFOPLIST_KEY_LSUIElement: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: tech.xvanturing.vi-conn
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Bridging-Header.h
