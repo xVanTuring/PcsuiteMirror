@@ -56,4 +56,17 @@ enum Notifier {
         let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
     }
+
+    /// Mirror a phone notification to a native macOS banner. `title` is the
+    /// notification's own title (falls back to the app name); `app` is shown as the
+    /// subtitle so the source is clear.
+    static func postPhoneNotification(app: String, title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title.isEmpty ? app : title
+        if !app.isEmpty && content.title != app { content.subtitle = app }
+        content.body = body
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+    }
 }

@@ -16,6 +16,7 @@ struct ConnectFeatures {
     var clipRecv: Bool
     var clipSend: Bool
     var verify: Bool
+    var notify: Bool
 }
 
 /// Owns the Rust FFI handles and runs everything off the main thread.
@@ -39,6 +40,12 @@ final class SessionController {
     var onFrameCount: ((Int) -> Void)?
     var onFormat: ((Int, Int) -> Void)?
     var onVerifyCode: ((String) -> Void)?
+    /// A phone notification was forwarded: `(appName, title, content)`. Delivered on
+    /// the main queue while connected (if the notify feature is armed).
+    var onNotification: ((String, String, String) -> Void)?
+    /// Phone device info (storage capacity, model, OS) fetched after connect.
+    /// Delivered on the main queue.
+    var onDeviceInfo: ((PhoneInfo) -> Void)?
     /// Privacy / secure-screen state token ("clear" / "password" / "safety" /
     /// "lockScreen"). Delivered on the main queue while mirroring.
     var onPrivacy: ((String) -> Void)?
@@ -65,6 +72,7 @@ final class SessionController {
     private var feeder: HEVCFeeder?
 
     private var verifyDone: DispatchSemaphore?
+    private var notifyDone: DispatchSemaphore?
     private var frameDone: DispatchSemaphore?
     private var privacyDone: DispatchSemaphore?
     private var cursorDone: DispatchSemaphore?
@@ -125,12 +133,17 @@ final class SessionController {
                     s.enable_verify()
                     startVerifyLoop(s)
                 }
+                if features.notify {
+                    s.enable_notify()
+                    startNotifyLoop(s)
+                }
                 setSession(s)
                 connGen += 1
                 currentDevice = device
                 startDisconnectWatcher(s, gen: connGen)
                 emitState(.connected(device))
                 emitMirroring(false, nil)
+                fetchDeviceInfo(s)          // storage/model panel data (off-queue)
                 log("connected ✓ (\(device.displayName))")
             } catch {
                 if isCancelled() { emitState(.disconnected) }
@@ -162,6 +175,11 @@ final class SessionController {
             s.stop_verify()
             done.wait()                 // block until the verify thread exits
             verifyDone = nil
+        }
+        if let s = session, let done = notifyDone {
+            s.stop_notify()
+            done.wait()                 // block until the notify thread exits
+            notifyDone = nil
         }
         if let s = session, let done = watchDone {
             s.stop_watch()
@@ -345,6 +363,40 @@ final class SessionController {
         }
         t.name = "verify-loop"
         t.start()
+    }
+
+    // MARK: - Notification relay loop
+
+    private func startNotifyLoop(_ s: PcSession) {
+        let done = DispatchSemaphore(value: 0)
+        notifyDone = done
+        let t = Thread { [weak self] in
+            while true {
+                let raw = s.next_notification().toString()
+                if raw.isEmpty { break }            // stopped or session ended
+                let f = raw.components(separatedBy: "\t")
+                let app = f.count > 0 ? f[0] : ""
+                let title = f.count > 1 ? f[1] : ""
+                let content = f.count > 2 ? f[2] : ""
+                self?.emit { self?.onNotification?(app, title, content) }
+            }
+            done.signal()
+        }
+        t.name = "notify-loop"
+        t.start()
+    }
+
+    // MARK: - Device info (storage / model)
+
+    /// Fetch the phone's `/base-info` (storage capacity, model, OS) on a one-shot
+    /// background thread — `device_info()` is a blocking HTTP round-trip, so it must
+    /// not run on `queue` (which serializes the mirror/input lifecycle) or main.
+    private func fetchDeviceInfo(_ s: PcSession) {
+        Thread.detachNewThread { [weak self] in
+            guard let rs = try? s.device_info(),
+                  let info = PhoneInfo.parse(rs.toString()) else { return }
+            self?.emit { self?.onDeviceInfo?(info) }
+        }
     }
 
     // MARK: - Disconnect detection & recovery

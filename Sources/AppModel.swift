@@ -25,12 +25,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var privacyState: String = ""
     /// Mirror-window link status (drives the reconnect overlay).
     @Published private(set) var mirrorLink: MirrorLink = .live
+    /// Phone device info (storage capacity, model, OS) for the connected device;
+    /// nil when disconnected. Fetched shortly after connect.
+    @Published private(set) var deviceInfo: PhoneInfo?
 
     // Persisted preferences (default ON).
     @Published var autoReconnect: Bool { didSet { Store.autoReconnect = autoReconnect } }
     @Published var clipboardEnabled: Bool { didSet { Store.clipboardEnabled = clipboardEnabled } }
     @Published var clipboardDirection: ClipboardDirection { didSet { Store.clipboardDirection = clipboardDirection } }
     @Published var verifyEnabled: Bool { didSet { Store.verifyEnabled = verifyEnabled } }
+    @Published var notifyEnabled: Bool { didSet { Store.notifyEnabled = notifyEnabled } }
     @Published var lanIP: String { didSet { Store.lanIP = lanIP } }
     @Published private(set) var resolution: MirrorResolution
     @Published private(set) var lastDevice: DeviceRef?
@@ -58,6 +62,7 @@ final class AppModel: ObservableObject {
         clipboardEnabled = Store.clipboardEnabled
         clipboardDirection = Store.clipboardDirection
         verifyEnabled = Store.verifyEnabled
+        notifyEnabled = Store.notifyEnabled
         lanIP = Store.lanIP
         resolution = Store.resolution
         lastDevice = Store.lastDevice
@@ -105,7 +110,8 @@ final class AppModel: ObservableObject {
             clipboard: clipboardEnabled,
             clipRecv: clipboardDirection.recv,
             clipSend: clipboardDirection.send,
-            verify: verifyEnabled
+            verify: verifyEnabled,
+            notify: notifyEnabled
         )
     }
 
@@ -240,6 +246,8 @@ final class AppModel: ObservableObject {
                 if self.mirror.isShowing && !self.mirroring {
                     self.controller.startMirror(maxSize: self.resolution.maxSize)
                 }
+            case .disconnected:
+                self.deviceInfo = nil
             case .failed:
                 // A reconnect attempt failed: back off and retry, or give up.
                 guard self.reconnectDevice != nil else { break }
@@ -284,6 +292,12 @@ final class AppModel: ObservableObject {
             self?.lastCode = code
             Pasteboard.copy(code)
             Notifier.postCode(code)
+        }
+        controller.onNotification = { app, title, content in
+            Notifier.postPhoneNotification(app: app, title: title, body: content)
+        }
+        controller.onDeviceInfo = { [weak self] info in
+            self?.deviceInfo = info
         }
     }
 }

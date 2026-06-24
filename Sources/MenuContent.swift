@@ -21,6 +21,7 @@ struct MenuContent: View {
         }
         .disabled(!model.clipboardEnabled)
         Toggle(L("Verify-code relay"), isOn: $model.verifyEnabled)
+        Toggle(L("Notification relay"), isOn: $model.notifyEnabled)
         Toggle(L("Auto-reconnect last device"), isOn: $model.autoReconnect)
         Menu(L("Mirror resolution")) {
             ForEach(MirrorResolution.allCases) { r in
@@ -38,6 +39,9 @@ struct MenuContent: View {
 
     @ViewBuilder private var connectionItems: some View {
         if model.isConnected {
+            if let info = model.deviceInfo {
+                Text("\(info.name) · \(L("Storage")) \(info.storageSummary)")
+            }
             Button(model.mirroring ? L("Stop mirroring") : L("Start mirroring")) {
                 if model.mirroring { model.closeMirror() } else { model.openMirror() }
             }

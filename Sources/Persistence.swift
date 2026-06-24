@@ -42,6 +42,40 @@ enum MirrorResolution: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// Phone facts from the `/base-info` gateway (storage capacity, model, OS) — the
+/// data the desktop app shows in its device panel. Built from the tab-separated
+/// string returned by `PcSession.device_info()`.
+struct PhoneInfo: Equatable {
+    var name: String
+    var brand: String
+    var product: String
+    var androidVersion: String
+    var osVersion: String
+    var widthPixels: Int
+    var heightPixels: Int
+    var foldScreen: Bool
+    var totalStorageGB: String
+    var availableStorageGB: String
+    var availableBytes: Int64
+    var account: String
+
+    /// Parse the `device_info()` payload: 12 tab-separated fields in a fixed order.
+    static func parse(_ s: String) -> PhoneInfo? {
+        let f = s.components(separatedBy: "\t")
+        guard f.count >= 12 else { return nil }
+        return PhoneInfo(
+            name: f[0], brand: f[1], product: f[2], androidVersion: f[3], osVersion: f[4],
+            widthPixels: Int(f[5]) ?? 0, heightPixels: Int(f[6]) ?? 0,
+            foldScreen: f[7] == "1",
+            totalStorageGB: f[8], availableStorageGB: f[9],
+            availableBytes: Int64(f[10]) ?? 0, account: f[11]
+        )
+    }
+
+    /// Compact storage summary, e.g. "327.55 / 512 GB".
+    var storageSummary: String { "\(availableStorageGB) / \(totalStorageGB) GB" }
+}
+
 /// Clipboard sync direction.
 enum ClipboardDirection: String, CaseIterable, Identifiable, Codable {
     case both       // two-way
@@ -80,6 +114,10 @@ enum Store {
     static var verifyEnabled: Bool {
         get { flag("verifyEnabled", default: true) }
         set { d.set(newValue, forKey: "verifyEnabled") }
+    }
+    static var notifyEnabled: Bool {
+        get { flag("notifyEnabled", default: true) }
+        set { d.set(newValue, forKey: "notifyEnabled") }
     }
     static var lanIP: String {
         get { d.string(forKey: "lanIP") ?? "" }
