@@ -28,6 +28,7 @@ struct MenuContent: View {
                 Toggle(r.label, isOn: pick(model.resolution == r) { model.setResolution(r) })
             }
         }
+        Button(L("Wi-Fi identity…")) { SettingsWindowController.shared.show() }
         if model.lastDevice != nil && !model.isConnected {
             Button(L("Forget device")) { model.forgetDevice() }
         }

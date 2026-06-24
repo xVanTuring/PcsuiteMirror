@@ -118,7 +118,9 @@ final class SessionController {
                 let s: PcSession
                 switch device.transport {
                 case .usb: s = try pcsuite_connect_usb()
-                case .lan: s = try pcsuite_connect_lan(device.ip ?? "", false)
+                case .lan:
+                    applyLanIdentityToCore()   // push openID + seed from settings
+                    s = try pcsuite_connect_lan(device.ip ?? "", Store.lanUseRemote)
                 }
                 if isCancelled() {                 // user cancelled mid-connect → discard
                     log("connect cancelled; discarding session")

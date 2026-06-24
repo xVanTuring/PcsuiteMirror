@@ -21,6 +21,14 @@ struct DeviceRef: Codable, Equatable {
     }
 }
 
+/// A per-phone pairing seed (historyPhone `ext.seeds`) for the LAN connectType=2
+/// path. Keyed by the phone's LAN IP. Not needed when using connectType=1.
+struct SeedEntry: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var ip: String
+    var seed: String
+}
+
 /// Mirror resolution preset — caps the phone's longer screen edge (px). Lower =
 /// less encode/decode latency. `.high` (0) means the core's full-resolution default.
 enum MirrorResolution: String, CaseIterable, Identifiable, Codable {
@@ -143,5 +151,43 @@ enum Store {
                 d.removeObject(forKey: "lastDevice")
             }
         }
+    }
+
+    // MARK: - LAN pairing identity (only the LAN path needs these; USB ignores them)
+
+    /// vivo account openId — the phone matches the LAN sign against this. Account-
+    /// level: the same value works for every phone signed into that account.
+    static var openID: String {
+        get { d.string(forKey: "openID") ?? "" }
+        set { d.set(newValue, forKey: "openID") }
+    }
+    /// Display name announced to the phone. Defaults to this Mac's name.
+    static var deviceName: String {
+        get { d.string(forKey: "deviceName") ?? (Host.current().localizedName ?? "My Mac") }
+        set { d.set(newValue, forKey: "deviceName") }
+    }
+    /// PC device id / MAC (12 hex). Optional — the phone only validates openId.
+    static var pcMac: String {
+        get { d.string(forKey: "pcMac") ?? "" }
+        set { d.set(newValue, forKey: "pcMac") }
+    }
+    /// Optional display account string (cosmetic, e.g. a masked phone number).
+    static var accountLabel: String {
+        get { d.string(forKey: "accountLabel") ?? "" }
+        set { d.set(newValue, forKey: "accountLabel") }
+    }
+    /// Connect with connectType=1 (no stored seed). Recommended for a new device;
+    /// when off, connectType=2 uses the per-IP `seeds` below.
+    static var lanUseRemote: Bool {
+        get { flag("lanUseRemote", default: false) }
+        set { d.set(newValue, forKey: "lanUseRemote") }
+    }
+    /// Per-phone stored pairing seeds for the connectType=2 LAN path.
+    static var seeds: [SeedEntry] {
+        get {
+            guard let data = d.data(forKey: "seeds") else { return [] }
+            return (try? JSONDecoder().decode([SeedEntry].self, from: data)) ?? []
+        }
+        set { d.set(try? JSONEncoder().encode(newValue), forKey: "seeds") }
     }
 }
