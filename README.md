@@ -25,24 +25,25 @@ generated Swift glue under `../pcsuite-rs/crates/pcsuite-ffi/generated/`.
 
 ## Configuration
 
-The app gets your pairing identity and per-IP seed from the Rust core's config,
-**not** from any in-app UI. Because the bundled app launches without a shell
-environment and with CWD `/`, the only config source it reads is
-**`~/.config/pcsuite/config.json`** (the app is unsandboxed, so this is your real
-home). Create it from
-[`../pcsuite-rs/pcsuite.example.json`](../pcsuite-rs/pcsuite.example.json):
+**USB needs no configuration** — plug in, authorize USB debugging, connect. The
+adb channel is its own trust; no account/seed is involved.
 
-```jsonc
-// ~/.config/pcsuite/config.json
-{
-  "open_id": "your-account-openid",
-  "pc_mac": "001122334455",
-  "device_name": "My MacBook Pro",
-  "seeds": { "192.168.1.42": "per-ip-pairing-seed-uuid" }
-}
-```
+**Wi-Fi (LAN)** presents your vivo-account `openID` to the phone, so set it once in
+the menu-bar item **“Wi-Fi identity…”**:
 
-Without it, the core uses placeholder values that will not pair with a real phone.
+- **Account openID** — per vivo-account; the same value works for every phone
+  signed into that account (the phone only validates this). Device name / MAC are
+  cosmetic and optional.
+- **Connect without a seed (connectType=1)** — on by default; needs only the
+  openID, so adding a new phone is just typing its IP. Turn it off to use
+  **connectType=2** with a per-phone seed (from the phone’s `historyPhone`
+  `ext.seeds`).
+
+These are stored in the app and pushed into the core at connect time (via
+`pcsuite_set_identity` / `pcsuite_set_seed`). As a headless fallback the core also
+reads `~/.config/pcsuite/config.json` (see
+[`../pcsuite-rs/pcsuite.example.json`](../pcsuite-rs/pcsuite.example.json)). With
+neither set, the core uses placeholder values that will not pair.
 
 ## License
 
