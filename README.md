@@ -23,6 +23,27 @@ generated Swift glue under `../pcsuite-rs/crates/pcsuite-ffi/generated/`.
 
 [xcodegen]: https://github.com/yonaskolb/XcodeGen
 
+## Configuration
+
+The app gets your pairing identity and per-IP seed from the Rust core's config,
+**not** from any in-app UI. Because the bundled app launches without a shell
+environment and with CWD `/`, the only config source it reads is
+**`~/.config/pcsuite/config.json`** (the app is unsandboxed, so this is your real
+home). Create it from
+[`../pcsuite-rs/pcsuite.example.json`](../pcsuite-rs/pcsuite.example.json):
+
+```jsonc
+// ~/.config/pcsuite/config.json
+{
+  "open_id": "your-account-openid",
+  "pc_mac": "001122334455",
+  "device_name": "My MacBook Pro",
+  "seeds": { "192.168.1.42": "per-ip-pairing-seed-uuid" }
+}
+```
+
+Without it, the core uses placeholder values that will not pair with a real phone.
+
 ## License
 
 Copyright (C) 2026 xVanTuring
