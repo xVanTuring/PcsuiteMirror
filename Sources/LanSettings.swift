@@ -8,6 +8,7 @@ import AppKit
 /// (the connect queue); the core guards the overrides with a lock.
 func applyIdentityToCore() {
     pcsuite_set_identity(Store.openID, Store.pcMac, Store.accountLabel, Store.deviceName)
+    pcsuite_set_clip_id(Store.clipPcId)
     for e in Store.seeds {
         let ip = e.ip.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !ip.isEmpty else { continue }
@@ -24,6 +25,7 @@ struct LanSettingsView: View {
     @State private var deviceName = Store.deviceName
     @State private var pcMac = Store.pcMac
     @State private var account = Store.accountLabel
+    @State private var clipPcId = Store.clipPcId
     @State private var useRemote = Store.lanUseRemote
     @State private var seeds = Store.seeds
 
@@ -32,13 +34,14 @@ struct LanSettingsView: View {
             Form {
                 Section {
                     TextField(L("Account openID"), text: $openID)
+                    TextField(L("Clipboard PC id"), text: $clipPcId)
                     TextField(L("Device name"), text: $deviceName)
                     TextField(L("PC MAC (optional)"), text: $pcMac)
                     TextField(L("Account label (optional)"), text: $account)
                 } header: {
                     Text(L("Account identity"))
                 } footer: {
-                    Text(L("openID is per vivo-account (same value for every phone on that account). Required for Wi-Fi connect AND for clipboard sync — including over USB, since the shared clipboard only works within one account. Mac/name are not validated by the phone."))
+                    Text(L("openID is per vivo-account (same for every phone on it), required for Wi-Fi connect AND clipboard (incl. USB — shared clipboard is account-scoped). Clipboard PC id must match the id the phone registered for this Mac at pairing, or phone→Mac clipboard won't sync. Mac/name aren't validated."))
                 }
 
                 Section {
@@ -80,6 +83,7 @@ struct LanSettingsView: View {
 
     private func save() {
         Store.openID = openID.trimmingCharacters(in: .whitespacesAndNewlines)
+        Store.clipPcId = clipPcId.trimmingCharacters(in: .whitespacesAndNewlines)
         Store.deviceName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
         Store.pcMac = pcMac.trimmingCharacters(in: .whitespacesAndNewlines)
         Store.accountLabel = account.trimmingCharacters(in: .whitespacesAndNewlines)

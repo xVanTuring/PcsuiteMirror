@@ -176,6 +176,13 @@ enum Store {
         get { d.string(forKey: "accountLabel") ?? "" }
         set { d.set(newValue, forKey: "accountLabel") }
     }
+    /// Super-clipboard PC device id (6 chars). The phone pushes its clipboard only
+    /// to the id it registered for this Mac at pairing, so this MUST match it for
+    /// phone→Mac sync. Empty → core placeholder (phone→Mac won't work).
+    static var clipPcId: String {
+        get { d.string(forKey: "clipPcId") ?? "" }
+        set { d.set(newValue, forKey: "clipPcId") }
+    }
     /// Connect with connectType=1 (no stored seed). Recommended for a new device;
     /// when off, connectType=2 uses the per-IP `seeds` below.
     static var lanUseRemote: Bool {
