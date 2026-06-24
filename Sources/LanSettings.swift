@@ -1,11 +1,12 @@
 import SwiftUI
 import AppKit
 
-/// Push the persisted LAN pairing identity + per-phone seeds into the Rust core.
-/// Call right before a LAN connect. USB ignores identity, so it's a LAN-only step.
-/// Runs on whatever thread the caller is on (the connect queue) — the core guards
-/// the overrides with a lock.
-func applyLanIdentityToCore() {
+/// Push the persisted account identity + per-phone seeds into the Rust core.
+/// Call right before *any* connect: the LAN sign needs the openID, and so does the
+/// super-clipboard (it only syncs within one vivo account) — so USB needs the
+/// openID too even though its *connection* doesn't. Runs on the caller's thread
+/// (the connect queue); the core guards the overrides with a lock.
+func applyIdentityToCore() {
     pcsuite_set_identity(Store.openID, Store.pcMac, Store.accountLabel, Store.deviceName)
     for e in Store.seeds {
         let ip = e.ip.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -35,9 +36,9 @@ struct LanSettingsView: View {
                     TextField(L("PC MAC (optional)"), text: $pcMac)
                     TextField(L("Account label (optional)"), text: $account)
                 } header: {
-                    Text(L("Identity — Wi-Fi only (USB needs none)"))
+                    Text(L("Account identity"))
                 } footer: {
-                    Text(L("openID is per vivo-account: the same value works for every phone signed into that account. Mac/name are not validated by the phone."))
+                    Text(L("openID is per vivo-account (same value for every phone on that account). Required for Wi-Fi connect AND for clipboard sync — including over USB, since the shared clipboard only works within one account. Mac/name are not validated by the phone."))
                 }
 
                 Section {
@@ -103,7 +104,7 @@ final class SettingsWindowController {
             self?.window?.close()
         }))
         let w = NSWindow(contentViewController: host)
-        w.title = L("Wi-Fi identity")
+        w.title = L("Identity")
         w.styleMask = [.titled, .closable]
         w.isReleasedWhenClosed = false
         w.center()
