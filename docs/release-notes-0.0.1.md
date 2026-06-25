@@ -17,18 +17,15 @@ Android (vivo) phone over USB or Wi-Fi, wrapping the pure-Rust `pcsuite` core.
 - USB: just plug in and authorize USB debugging. Wi-Fi: set your vivo-account
   `openID` once in the menu-bar **"Wi-Fi identity…"** item (see the README).
 
-### Install — unsigned build, please read
-This build is **ad-hoc signed and not notarized** (no paid Apple Developer ID).
-macOS Gatekeeper will block it on first launch. To open it:
+### Install
+Signed with a Developer ID certificate and **notarized by Apple**, so it opens
+normally — no Gatekeeper right-click dance:
 
 1. Open the `.dmg` and drag **PcsuiteMirror.app** to **Applications**.
-2. **Right-click the app → Open**, then confirm in the dialog (only needed once).
+2. Launch it from Applications. (It's a menu-bar app — look for its icon in the
+   menu bar, not the Dock.)
 
-If macOS still refuses ("damaged / cannot be opened"), clear the quarantine flag:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/PcsuiteMirror.app
-```
+The `.zip` is the same notarized app if you prefer that over the disk image.
 
 ### License
 GPLv3 — Copyright (C) 2026 xVanTuring.
