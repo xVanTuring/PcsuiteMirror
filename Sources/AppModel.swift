@@ -135,6 +135,17 @@ final class AppModel: ObservableObject {
         controller.connect(dev, features: features, reconnect: false)
     }
 
+    /// QR pairing (local `ls=true`): show a QR for the phone to scan; on scan the
+    /// phone reports its IP and we connect — no IP/openID/seed needed.
+    func pairQR() {
+        cancelReconnect()
+        controller.pairAndConnect(features: features) { url in
+            QRPairingWindowController.shared.show(url: url) { [weak self] in
+                self?.cancelConnect()
+            }
+        }
+    }
+
     func cancelConnect() { cancelReconnect(); controller.cancel() }
     func disconnect() { cancelReconnect(); closeMirror(); controller.disconnect() }
 
@@ -236,6 +247,12 @@ final class AppModel: ObservableObject {
         controller.onState = { [weak self] st in
             guard let self else { return }
             self.state = st
+            // The QR pairing window only exists while waiting for a scan; dismiss it
+            // once we leave that wait (connected / failed / disconnected).
+            switch st {
+            case .connecting, .reconnecting: break
+            default: QRPairingWindowController.shared.close()
+            }
             switch st {
             case .connected(let d):
                 self.lastDevice = d
@@ -297,7 +314,26 @@ final class AppModel: ObservableObject {
             Notifier.postPhoneNotification(app: app, title: title, body: content)
         }
         controller.onDeviceInfo = { [weak self] info in
-            self?.deviceInfo = info
+            guard let self else { return }
+            self.deviceInfo = info
+            self.autoFillOpenID(info.openID)
+        }
+    }
+
+    /// The phone reports its real account openID in `/base-info`. A session that
+    /// connected without one configured (notably QR pairing, whose local path never
+    /// carries openID) can learn it here and save it — so the account-scoped features
+    /// (clipboard) and connectType=1 reconnect work on the next connect. Only fills an
+    /// empty slot; never clobbers a value the user set by hand.
+    private func autoFillOpenID(_ raw: String) {
+        let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, id != Store.openID else { return }
+        if Store.openID.isEmpty {
+            Store.openID = id
+            applyIdentityToCore()   // push into the core for subsequent connects
+            log("learned account openID from phone; saved (clipboard + reconnect now configured)")
+        } else {
+            log("phone openID differs from the configured one; keeping yours")
         }
     }
 }

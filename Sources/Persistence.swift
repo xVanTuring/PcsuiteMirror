@@ -11,9 +11,13 @@ enum Transport: String, Codable {
 struct DeviceRef: Codable, Equatable {
     var transport: Transport
     var ip: String?
+    /// Phone display name when known (e.g. "iQOO 15"), used for nicer labels —
+    /// populated by QR pairing. Optional → backward-compatible with stored data.
+    var name: String? = nil
 
-    /// Short label for the menu, e.g. "USB" or "192.168.1.42".
+    /// Short label for the menu, e.g. "iQOO 15", "USB", or "192.168.1.42".
     var displayName: String {
+        if let n = name, !n.isEmpty { return n }
         switch transport {
         case .usb: return L("via USB")
         case .lan: return ip ?? L("via Wi-Fi")
@@ -66,8 +70,12 @@ struct PhoneInfo: Equatable {
     var availableStorageGB: String
     var availableBytes: Int64
     var account: String
+    /// Real vivo-account openId (16-hex) reported by the phone; "" if not logged in
+    /// or an older core. Used to self-fill the pairing identity (see AppModel).
+    var openID: String = ""
 
-    /// Parse the `device_info()` payload: 12 tab-separated fields in a fixed order.
+    /// Parse the `device_info()` payload: tab-separated fields in a fixed order
+    /// (12 legacy fields + an optional 13th `openID`).
     static func parse(_ s: String) -> PhoneInfo? {
         let f = s.components(separatedBy: "\t")
         guard f.count >= 12 else { return nil }
@@ -76,7 +84,8 @@ struct PhoneInfo: Equatable {
             widthPixels: Int(f[5]) ?? 0, heightPixels: Int(f[6]) ?? 0,
             foldScreen: f[7] == "1",
             totalStorageGB: f[8], availableStorageGB: f[9],
-            availableBytes: Int64(f[10]) ?? 0, account: f[11]
+            availableBytes: Int64(f[10]) ?? 0, account: f[11],
+            openID: f.count > 12 ? f[12] : ""
         )
     }
 

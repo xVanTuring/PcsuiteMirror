@@ -54,6 +54,7 @@ struct MenuContent: View {
             Button(L("Cancel")) { model.cancelConnect() }
         } else {
             Button(L("Connect via USB")) { model.connectUSB() }
+            Button(L("Pair via QR…")) { model.pairQR() }
             Button(L("Connect over Wi-Fi…")) {
                 if let ip = promptForIP(default: model.lanIP) {
                     let t = ip.trimmingCharacters(in: .whitespacesAndNewlines)

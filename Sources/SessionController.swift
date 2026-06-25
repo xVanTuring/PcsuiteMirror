@@ -70,6 +70,9 @@ final class SessionController {
     private var session: PcSession?
     private var screen: PcScreen?
     private var feeder: HEVCFeeder?
+    // In-flight QR pairing handle (lock-guarded): retained so cancel() can abort the
+    // blocking wait_phone() and release the :9199 listener.
+    private var pairing: PcPairing?
 
     private var verifyDone: DispatchSemaphore?
     private var notifyDone: DispatchSemaphore?
@@ -126,26 +129,7 @@ final class SessionController {
                     emitState(.disconnected)
                     return
                 }
-                if features.clipboard {
-                    do { try s.enable_clipboard(features.clipRecv, features.clipSend) }
-                    catch { log("clipboard enable failed: \(ffiMessage(error))") }
-                }
-                if features.verify {
-                    s.enable_verify()
-                    startVerifyLoop(s)
-                }
-                if features.notify {
-                    s.enable_notify()
-                    startNotifyLoop(s)
-                }
-                setSession(s)
-                connGen += 1
-                currentDevice = device
-                startDisconnectWatcher(s, gen: connGen)
-                emitState(.connected(device))
-                emitMirroring(false, nil)
-                fetchDeviceInfo(s)          // storage/model panel data (off-queue)
-                log("connected ✓ (\(device.displayName))")
+                finishConnect(s, device: device, features: features)
             } catch {
                 if isCancelled() { emitState(.disconnected) }
                 else { emitState(.failed(ffiMessage(error))) }
@@ -154,10 +138,88 @@ final class SessionController {
         }
     }
 
+    /// Arm the requested features on a freshly-connected session, register it, start
+    /// the disconnect watcher, and report `.connected`. Runs on `queue`; the caller
+    /// has already passed the post-connect cancel check. Shared by every transport
+    /// (USB / LAN / QR pairing).
+    private func finishConnect(_ s: PcSession, device: DeviceRef, features: ConnectFeatures) {
+        if features.clipboard {
+            do { try s.enable_clipboard(features.clipRecv, features.clipSend) }
+            catch { log("clipboard enable failed: \(ffiMessage(error))") }
+        }
+        if features.verify {
+            s.enable_verify()
+            startVerifyLoop(s)
+        }
+        if features.notify {
+            s.enable_notify()
+            startNotifyLoop(s)
+        }
+        setSession(s)
+        connGen += 1
+        currentDevice = device
+        startDisconnectWatcher(s, gen: connGen)
+        emitState(.connected(device))
+        emitMirroring(false, nil)
+        fetchDeviceInfo(s)          // storage/model panel data (off-queue)
+        log("connected ✓ (\(device.displayName))")
+    }
+
+    /// QR pairing (local `ls=true` variant): begin pairing, hand the QR payload to
+    /// `onQR` (main queue) to display, then wait on a **dedicated thread** (the wait
+    /// can block up to the timeout, so it must not occupy the serial `queue`) for the
+    /// phone to scan and report its IP to `:9199`. On a hit, resume on `queue` and
+    /// connect — emitting the same `.connected` state as any other transport.
+    func pairAndConnect(features: ConnectFeatures, onQR: @escaping (String) -> Void) {
+        lock.lock(); cancelRequested = false; lock.unlock()
+        queue.async { [self] in
+            teardownLocked()                    // ensure any prior session is gone
+            applyIdentityToCore()               // nicer d=/u= in the QR (not required)
+            let pairing = pcsuite_pair_begin("")  // "" → auto-detect this Mac's LAN IP
+            lock.lock(); self.pairing = pairing; lock.unlock()
+            let url = pairing.qr_url().toString()
+            emit { onQR(url) }
+            emitState(.connecting(DeviceRef(transport: .lan, ip: nil, name: L("Scan to pair"))))
+
+            let t = Thread { [weak self] in
+                let result = Result { try pairing.wait_phone(180_000) }
+                guard let self else { return }
+                self.queue.async {
+                    self.lock.lock(); self.pairing = nil; self.lock.unlock()
+                    switch result {
+                    case .success(let paired):
+                        if self.isCancelled() { self.emitState(.disconnected); return }
+                        let ip = paired.phone_ip().toString()
+                        let name = paired.device_name().toString()
+                        let dev = DeviceRef(transport: .lan,
+                                            ip: ip.isEmpty ? nil : ip,
+                                            name: name.isEmpty ? nil : name)
+                        do {
+                            let s = try paired.connect()
+                            if self.isCancelled() { self.emitState(.disconnected); return }
+                            self.finishConnect(s, device: dev, features: features)
+                            log("QR paired ✓ (\(name) \(ip))")
+                        } catch {
+                            self.emitState(.failed(ffiMessage(error)))
+                            log("QR connect failed: \(ffiMessage(error))")
+                        }
+                    case .failure(let error):
+                        if self.isCancelled() { self.emitState(.disconnected) }
+                        else { self.emitState(.failed(ffiMessage(error))) }
+                        log("QR pairing ended: \(ffiMessage(error))")
+                    }
+                }
+            }
+            t.name = "qr-pair-wait"
+            t.start()
+        }
+    }
+
     /// Discard the result of an in-flight connect (the blocking Rust call can't be
     /// aborted, but we drop whatever it returns).
     func cancel() {
-        lock.lock(); cancelRequested = true; lock.unlock()
+        lock.lock(); cancelRequested = true; let p = pairing; lock.unlock()
+        p?.cancel()   // abort an in-flight QR-pairing wait, freeing the :9199 listener
     }
 
     func disconnect() {
@@ -171,6 +233,11 @@ final class SessionController {
 
     /// Stop mirroring and verify, then release the session. Runs on `queue`.
     private func teardownLocked() {
+        // Tell the phone the clipboard is going offline *before* dropping the session.
+        // Without this graceful frame the phone keeps a stale clipboard registration
+        // across the socket close, and phone→PC sync silently dies on the next connect.
+        // No-op (fast) if the link is already dead, so it's safe on connection-loss too.
+        if let s = session { s.stop_clipboard() }
         stopMirrorLocked()
         if let s = session, let done = verifyDone {
             s.stop_verify()
