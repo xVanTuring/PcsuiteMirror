@@ -27,8 +27,12 @@ targets:
         # Menu-bar agent: no Dock icon, no app-switcher entry (even before AppDelegate runs).
         INFOPLIST_KEY_LSUIElement: "YES"
         PRODUCT_BUNDLE_IDENTIFIER: tech.xvanturing.vi-conn
-        MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "1"
+        # Bumped by scripts/release.sh; "0.0.0"/build 0 is the unreleased baseline.
+        MARKETING_VERSION: "0.0.0"
+        CURRENT_PROJECT_VERSION: "0"
+        # App icon lives in Sources/Resources/Assets.xcassets (built by scripts/make-icon.sh).
+        # GENERATE_INFOPLIST_FILE picks up CFBundleIconName from this automatically.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Bridging-Header.h
         LIBRARY_SEARCH_PATHS:
           - $(PROJECT_DIR)/../pcsuite-rs/target/release

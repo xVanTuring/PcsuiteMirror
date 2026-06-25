@@ -3,5 +3,7 @@ PcsuiteMirror.xcodeproj/
 # build output
 build/
 DerivedData/
+# release artifacts (scripts/release.sh output)
+dist/
 *.xcuserstate
 .DS_Store

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Concept E: Apple-style two-phone base, clean origami-crane silhouette -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0"   stop-color="#8fd2ef"/>
+      <stop offset="0.5" stop-color="#6f8ef0"/>
+      <stop offset="1"   stop-color="#5d44d8"/>
+    </linearGradient>
+    <radialGradient id="bgGloss" cx="430" cy="220" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="darkPhone" x1="295" y1="195" x2="545" y2="665" gradientUnits="userSpaceOnUse">
+      <stop offset="0"   stop-color="#3d4760"/>
+      <stop offset="1"   stop-color="#242a3c"/>
+    </linearGradient>
+    <linearGradient id="whitePhone" x1="430" y1="260" x2="705" y2="740" gradientUnits="userSpaceOnUse">
+      <stop offset="0"   stop-color="#ffffff"/>
+      <stop offset="1"   stop-color="#e9ebf6"/>
+    </linearGradient>
+
+    <!-- crane palette -->
+    <linearGradient id="craneBody" x1="0" y1="0" x2="200" y2="210" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f1746a"/>
+      <stop offset="1" stop-color="#dc4f48"/>
+    </linearGradient>
+    <linearGradient id="craneGold" x1="170" y1="130" x2="45" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f6d177"/>
+      <stop offset="1" stop-color="#eebf52"/>
+    </linearGradient>
+
+    <clipPath id="tileClip"><rect x="100" y="100" width="824" height="824" rx="185" ry="185"/></clipPath>
+    <filter id="shDark" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#221b46" flood-opacity="0.35"/>
+    </filter>
+    <filter id="shWhite" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="20" stdDeviation="26" flood-color="#221b46" flood-opacity="0.32"/>
+    </filter>
+    <filter id="shCrane" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#7a3b38" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <g clip-path="url(#tileClip)">
+    <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#bg)"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#bgGloss)"/>
+
+    <!-- back (dark) phone -->
+    <g filter="url(#shDark)">
+      <rect x="295" y="195" width="250" height="470" rx="54" ry="54" fill="url(#darkPhone)"/>
+      <rect x="298" y="198" width="244" height="464" rx="51" ry="51" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="2.5"/>
+    </g>
+
+    <!-- front (frosted white) phone -->
+    <g filter="url(#shWhite)">
+      <rect x="430" y="260" width="275" height="480" rx="58" ry="58" fill="url(#whitePhone)"/>
+      <rect x="433" y="263" width="269" height="474" rx="55" ry="55" fill="none" stroke="#ffffff" stroke-opacity="0.9" stroke-width="2"/>
+    </g>
+
+    <!-- origami crane (local box ~258 x 232) -->
+    <g filter="url(#shCrane)" transform="translate(459.1 402.6) scale(0.84)">
+      <!-- gold lower wing (creased off the body) -->
+      <polygon points="110,130 168,198 45,232" fill="url(#craneGold)"/>
+      <!-- coral body -->
+      <polygon points="0,0 230,56 168,198" fill="url(#craneBody)"/>
+      <!-- head / beak -->
+      <polygon points="200,28 258,24 230,58" fill="#20242e"/>
+    </g>
+
+    <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" ry="183.5" fill="none" stroke="#ffffff" stroke-opacity="0.22" stroke-width="3"/>
+  </g>
+</svg>
