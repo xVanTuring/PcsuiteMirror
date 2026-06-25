@@ -192,10 +192,12 @@ enum Store {
         get { d.string(forKey: "clipPcId") ?? "" }
         set { d.set(newValue, forKey: "clipPcId") }
     }
-    /// Connect with connectType=1 (no stored seed). Recommended for a new device;
-    /// when off, connectType=2 uses the per-IP `seeds` below.
+    /// Connect with connectType=1 (no stored seed). Recommended (and the default):
+    /// it needs only the openID and works on any network. Turn off to use the per-IP
+    /// `seeds` below (connectType=2) — but the connect path also auto-falls-back to
+    /// connectType=1 when no seed is stored for the target IP.
     static var lanUseRemote: Bool {
-        get { flag("lanUseRemote", default: false) }
+        get { flag("lanUseRemote", default: true) }
         set { d.set(newValue, forKey: "lanUseRemote") }
     }
     /// Per-phone stored pairing seeds for the connectType=2 LAN path.

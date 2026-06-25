@@ -122,7 +122,21 @@ final class SessionController {
                 applyIdentityToCore()          // openID (for the sign + clipboard) + seeds
                 switch device.transport {
                 case .usb: s = try pcsuite_connect_usb()
-                case .lan: s = try pcsuite_connect_lan(device.ip ?? "", Store.lanUseRemote)
+                case .lan:
+                    let ip = device.ip ?? ""
+                    // connectType=2 (pre-shared seed) only works when the user has a
+                    // seed stored for *this* IP; without one, registration fails
+                    // outright ("LAN mode needs a stored_seed"). Fall back to the
+                    // seedless connectType=1 — it needs only the openID (which
+                    // self-fills from the phone), so Wi-Fi connect works out of the
+                    // box. An explicit "connect without a seed" preference also forces
+                    // connectType=1.
+                    let hasSeed = Store.seeds.contains {
+                        $0.ip.trimmingCharacters(in: .whitespacesAndNewlines) == ip
+                    }
+                    let remote = Store.lanUseRemote || !hasSeed
+                    log("LAN connect \(ip) connectType=\(remote ? 1 : 2)")
+                    s = try pcsuite_connect_lan(ip, remote)
                 }
                 if isCancelled() {                 // user cancelled mid-connect → discard
                     log("connect cancelled; discarding session")
