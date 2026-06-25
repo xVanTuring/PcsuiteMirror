@@ -1,14 +1,26 @@
 #!/usr/bin/env bash
 # scripts/release.sh
 #
-# Bump version → build Rust core → build Release .app → ad-hoc sign →
-# zip + DMG → tag → publish a GitHub release.
+# Bump version → build Rust core → build Release .app → Developer-ID sign
+# (hardened runtime) → notarize + staple → zip + DMG → tag → publish a
+# GitHub release.
 #
-# This app is NOT notarized and ships without a paid Developer-ID
-# signature (Sparkle auto-update is intentionally absent). The bundle is
-# only ad-hoc signed, so on first launch users must right-click → Open
-# (or `xattr -dr com.apple.quarantine PcsuiteMirror.app`). The release
-# notes spell this out.
+# The app is signed with a Developer ID Application certificate (team
+# $TEAM_ID), hardened-runtime enabled, then submitted to Apple's notary
+# service and the ticket stapled onto both the .app and the .dmg. Result:
+# Gatekeeper opens it with no right-click dance and no quarantine prompt,
+# even offline. (Sparkle auto-update is still intentionally absent.)
+#
+# One-time machine setup (already done for Noticky on this Mac):
+#   • Developer ID Application cert for team $TEAM_ID in the login keychain
+#       (Xcode → Settings → Accounts → Manage Certificates → + → Developer ID).
+#   • A notarytool credential profile, stored once with:
+#       xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+#           --apple-id <you@apple> --team-id $TEAM_ID --password <app-specific-pw>
+#   • The team's Apple Developer Program License Agreement must be current —
+#       if notarytool returns 403 "a required agreement is missing or has
+#       expired", accept the updated agreement at developer.apple.com /
+#       App Store Connect before releasing.
 #
 # Usage:
 #   ./scripts/release.sh <version> [--notes-file <path>] [--dry-run]
@@ -32,6 +44,12 @@ RUST_DIR="../pcsuite-rs"
 RUST_BUILD="${RUST_DIR}/crates/pcsuite-ffi/build-macos.sh"
 BUILD_DIR="build/DD"            # xcodebuild derivedData (gitignored)
 
+# Developer ID / notarization. TEAM_ID + NOTARY_PROFILE are shared with the
+# author's other notarized apps; override NOTARY_PROFILE via env if you stored
+# the credentials under a different name.
+TEAM_ID="T8F5T6HKG8"
+NOTARY_PROFILE="${NOTARY_PROFILE:-noticky-notary}"
+
 # ── Args ────────────────────────────────────────────────────────────
 usage() {
     cat <<EOF >&2
@@ -40,9 +58,10 @@ Usage: $(basename "$0") <version> [--notes-file <path>] [--dry-run]
   <version>          CFBundleShortVersionString, e.g. 0.0.1
   --notes-file PATH  File whose contents become the GitHub release body
                      (default: gh --generate-notes from commit messages).
-  --dry-run          Bump version + build + package locally, but skip
-                     commit / push / tag / GitHub release. Reverts the
-                     version bump afterwards so the tree stays clean.
+  --dry-run          Bump version + build + Developer-ID sign + package
+                     locally, but SKIP notarization, commit, push, tag and
+                     the GitHub release. Reverts the version bump afterwards
+                     so the tree stays clean.
 EOF
     exit 1
 }
@@ -89,9 +108,38 @@ command -v xcodegen >/dev/null || { echo "ERROR: xcodegen not on PATH (brew inst
 command -v xcodebuild >/dev/null || { echo "ERROR: xcodebuild not on PATH (install Xcode)" >&2; exit 1; }
 command -v cargo >/dev/null || { echo "ERROR: cargo not on PATH (install Rust)" >&2; exit 1; }
 
+# Developer ID Application signing identity for our team (needed for both real
+# and dry runs, since we sign in both). Resolve to the SHA-1 hash so codesign
+# can't pick the wrong cert when several are installed.
+DEV_ID_HASH="$(security find-identity -v -p codesigning \
+    | grep "Developer ID Application" | grep "(${TEAM_ID})" | head -1 | awk '{print $2}')"
+if [[ -z "$DEV_ID_HASH" ]]; then
+    echo "ERROR: no 'Developer ID Application' cert for team ${TEAM_ID} in the login keychain." >&2
+    echo "       Xcode → Settings → Accounts → Manage Certificates → + → Developer ID Application." >&2
+    exit 1
+fi
+DEV_ID_NAME="$(security find-identity -v -p codesigning \
+    | grep "$DEV_ID_HASH" | head -1 | sed -E 's/.*"(.+)"$/\1/')"
+echo "    signing identity: ${DEV_ID_NAME}"
+
 if [[ "$DRY_RUN" == "false" ]]; then
     command -v gh >/dev/null || { echo "ERROR: gh CLI not on PATH (brew install gh)" >&2; exit 1; }
     gh auth status >/dev/null 2>&1 || { echo "ERROR: gh not authenticated. Run 'gh auth login'." >&2; exit 1; }
+
+    # Notary credentials must work AND the team's agreement must be current.
+    # `notarytool history` surfaces a 403 agreement error before we build.
+    echo "    checking notary profile '${NOTARY_PROFILE}'…"
+    if ! NOTARY_CHECK="$(xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" 2>&1)"; then
+        echo "ERROR: notarytool profile '${NOTARY_PROFILE}' is unusable:" >&2
+        echo "$NOTARY_CHECK" | sed 's/^/       /' >&2
+        echo "       If this is a 403 'required agreement' error, sign in at" >&2
+        echo "       https://developer.apple.com/account and accept the updated" >&2
+        echo "       Program License Agreement, then retry." >&2
+        echo "       If credentials are missing, set them up once with:" >&2
+        echo "         xcrun notarytool store-credentials ${NOTARY_PROFILE} \\" >&2
+        echo "             --apple-id <id> --team-id ${TEAM_ID} --password <app-specific-pw>" >&2
+        exit 1
+    fi
 
     [[ -z "$(git status --porcelain)" ]] \
         || { echo "ERROR: working tree dirty. Commit or stash first." >&2; git status --short >&2; exit 1; }
@@ -133,8 +181,9 @@ revert_bump() {
 }
 
 # ── Build the Release .app straight into DIST_DIR ───────────────────
-# No Developer-ID export step — CODE_SIGNING_ALLOWED=NO yields an
-# unsigned binary that we ad-hoc sign below.
+# Build unsigned (CODE_SIGNING_ALLOWED=NO), then Developer-ID sign below with
+# hardened runtime — simpler than an archive/exportArchive round-trip and the
+# bundle has no nested code to re-sign.
 echo "==> Cleaning ${DIST_DIR}"
 rm -rf "${DIST_DIR}"
 mkdir -p "${DIST_DIR}"
@@ -158,18 +207,42 @@ fi
 # Strip the build's sidecar products so only the .app ships in the dir.
 rm -rf "${DIST_DIR}/${PRODUCT}.swiftmodule" "${DIST_DIR}/${PRODUCT}.app.dSYM"
 
-# ── Ad-hoc sign (best effort — bundle has no nested code) ────────────
-echo "==> Ad-hoc signing ${PRODUCT}.app"
-codesign --force --deep --sign - "$APP"
-codesign --verify --verbose=2 "$APP" || { echo "ERROR: ad-hoc codesign verify failed" >&2; revert_bump; exit 1; }
+# ── Developer-ID sign with hardened runtime ─────────────────────────
+# --options runtime → hardened runtime (required for notarization).
+# --timestamp       → secure Apple timestamp (also required).
+# No --entitlements: the app needs no hardened-runtime exceptions (Rust is
+# statically linked; only Apple system frameworks are dynamically loaded).
+echo "==> Developer-ID signing ${PRODUCT}.app"
+codesign --force --options runtime --timestamp --sign "$DEV_ID_HASH" "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP" \
+    || { echo "ERROR: codesign verify failed" >&2; revert_bump; exit 1; }
+codesign -d --verbose=2 "$APP" 2>&1 | grep -E "TeamIdentifier|Authority=Developer ID|flags=.*runtime" || true
 
 echo "==> Built arch:"
 lipo -info "$APP/Contents/MacOS/${PRODUCT}" 2>&1 || true
 
-# ── Zip (ditto, Apple-correct form) ─────────────────────────────────
+# ── Notarize the .app (submit a zip; staple the ticket onto the bundle) ──
+if [[ "$DRY_RUN" == "false" ]]; then
+    echo "==> Zipping app for notarization"
+    ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+
+    echo "==> Submitting .app to Apple notary (--wait blocks until verdict)"
+    NOTARY_LOG="${DIST_DIR}/notary-app.log"
+    if ! xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1 | tee "$NOTARY_LOG"; then
+        echo "ERROR: app notarization failed. See $NOTARY_LOG" >&2
+        echo "       Pull details: xcrun notarytool log <id> --keychain-profile $NOTARY_PROFILE" >&2
+        revert_bump
+        exit 1
+    fi
+
+    echo "==> Stapling ticket onto ${PRODUCT}.app"
+    xcrun stapler staple "$APP"
+    xcrun stapler validate "$APP"
+fi
+
+# ── Final zip (must contain the STAPLED app) ────────────────────────
 echo "==> Zipping ${ZIP_ASSET}"
-# --sequesterRsrc/--keepParent keep the bundle structure intact so the
-# extracted .app stays launchable (matches Apple's notarization form).
+rm -f "$ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
 # ── DMG (hdiutil; create-dmg not required) ──────────────────────────
@@ -186,15 +259,32 @@ hdiutil create \
     "$DMG" >/dev/null
 rm -rf "$DMG_STAGE"
 
+# ── Notarize + staple the DMG too ───────────────────────────────────
+if [[ "$DRY_RUN" == "false" ]]; then
+    echo "==> Submitting .dmg to Apple notary"
+    NOTARY_LOG_DMG="${DIST_DIR}/notary-dmg.log"
+    if ! xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1 | tee "$NOTARY_LOG_DMG"; then
+        echo "ERROR: DMG notarization failed. See $NOTARY_LOG_DMG" >&2
+        revert_bump
+        exit 1
+    fi
+    echo "==> Stapling DMG"
+    xcrun stapler staple "$DMG"
+    xcrun stapler validate "$DMG"
+
+    echo "==> Gatekeeper assessment (should PASS now):"
+    spctl -a -t exec -vv "$APP" 2>&1 || true
+fi
+
 echo "==> Artifacts:"
 echo "    $ZIP  ($(du -h "$ZIP" | cut -f1))"
 echo "    $DMG  ($(du -h "$DMG" | cut -f1))"
 
 # ── Dry run stops here ──────────────────────────────────────────────
 if [[ "$DRY_RUN" == "true" ]]; then
-    echo "==> [dry-run] reverting version bump; skipping commit / tag / release."
+    echo "==> [dry-run] reverting version bump; skipping notarize / commit / tag / release."
     revert_bump
-    echo "    Inspect artifacts under ${DIST_DIR}/ then re-run without --dry-run."
+    echo "    Artifacts under ${DIST_DIR}/ are signed but NOT notarized."
     exit 0
 fi
 
@@ -232,12 +322,8 @@ fi
 REPO_SLUG="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo '<owner>/<repo>')"
 echo
 echo "================================================================"
-echo "Release ${TAG} done"
+echo "Release ${TAG} done — Developer-ID signed + notarized + stapled"
 echo "  .zip : ${ZIP}"
 echo "  .dmg : ${DMG}"
 echo "  URL  : https://github.com/${REPO_SLUG}/releases/tag/${TAG}"
 echo "================================================================"
-echo
-echo "Unsigned build — first-launch instructions for users:"
-echo "  Right-click PcsuiteMirror.app → Open  (then confirm), or:"
-echo "  xattr -dr com.apple.quarantine /Applications/PcsuiteMirror.app"
