@@ -92,6 +92,87 @@ struct LanSettingsView: View {
     }
 }
 
+/// Consolidated settings window: the feature toggles and pickers that used to live
+/// in the menu-bar dropdown (most are set once and rarely touched). Bound directly
+/// to the shared `AppModel`, so each change persists immediately and the menu stays
+/// in sync — there is no Save step. The account identity (rarely needed now that the
+/// openID self-fills on connect) is tucked behind the "Identity / account…" link.
+struct PreferencesView: View {
+    @ObservedObject var model: AppModel
+    var onIdentity: () -> Void
+
+    /// `model.resolution` is `private(set)` (changing it may restart the live
+    /// stream), so route the picker through `setResolution(_:)`.
+    private var resolution: Binding<MirrorResolution> {
+        Binding(get: { model.resolution }, set: { model.setResolution($0) })
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    Toggle(L("Clipboard sync"), isOn: $model.clipboardEnabled)
+                    Picker(L("Clipboard direction"), selection: $model.clipboardDirection) {
+                        ForEach(ClipboardDirection.allCases) { Text($0.label).tag($0) }
+                    }
+                    .disabled(!model.clipboardEnabled)
+                    Toggle(L("Verify-code relay"), isOn: $model.verifyEnabled)
+                    Toggle(L("Notification relay"), isOn: $model.notifyEnabled)
+                } header: {
+                    Text(L("Sync"))
+                } footer: {
+                    Text(L("Feature changes apply after reconnect"))
+                }
+
+                Section {
+                    Toggle(L("Auto-reconnect last device"), isOn: $model.autoReconnect)
+                    Picker(L("Mirror resolution"), selection: resolution) {
+                        ForEach(MirrorResolution.allCases) { Text($0.label).tag($0) }
+                    }
+                } header: {
+                    Text(L("Connection"))
+                }
+            }
+            .formStyle(.grouped)
+
+            Divider()
+            HStack {
+                Button(L("Identity / account…")) { onIdentity() }
+                    .buttonStyle(.link)
+                Spacer()
+            }
+            .padding(12)
+        }
+        .frame(width: 440, height: 360)
+    }
+}
+
+/// Hosts `PreferencesView` in a plain window (menu-bar apps have no window by
+/// default). Holds the shared model so the toggles bind to live app state.
+final class PreferencesWindowController {
+    static let shared = PreferencesWindowController()
+    private var window: NSWindow?
+
+    func show(model: AppModel) {
+        if let w = window {
+            w.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let host = NSHostingController(rootView: PreferencesView(model: model, onIdentity: {
+            SettingsWindowController.shared.show()
+        }))
+        let w = NSWindow(contentViewController: host)
+        w.title = L("Settings")
+        w.styleMask = [.titled, .closable]
+        w.isReleasedWhenClosed = false
+        w.center()
+        window = w
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
 /// Hosts `LanSettingsView` in a plain window. A menu-bar (`.accessory`) app has no
 /// window by default, so we create one on demand and bring it to the front.
 final class SettingsWindowController {

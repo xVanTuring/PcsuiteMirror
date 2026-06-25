@@ -47,6 +47,14 @@
 "Last code" = "最近验证码";
 "Quit" = "退出";
 
+/* settings window */
+"Settings…" = "设置…";
+"Settings" = "设置";
+"Sync" = "同步";
+"Connection" = "连接";
+"Notification relay" = "通知接力";
+"Identity / account…" = "身份 / 账号…";
+
 /* verify-code notification */
 "Verification code" = "验证码";
 "%@ copied to clipboard" = "%@ 已复制到剪贴板";

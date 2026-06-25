@@ -47,6 +47,14 @@
 "Last code" = "Last code";
 "Quit" = "Quit";
 
+/* settings window */
+"Settings…" = "Settings…";
+"Settings" = "Settings";
+"Sync" = "Sync";
+"Connection" = "Connection";
+"Notification relay" = "Notification relay";
+"Identity / account…" = "Identity / account…";
+
 /* verify-code notification */
 "Verification code" = "Verification code";
 "%@ copied to clipboard" = "%@ copied to clipboard";

@@ -13,22 +13,8 @@ struct MenuContent: View {
         connectionItems
 
         Divider()
-        Toggle(L("Clipboard sync"), isOn: $model.clipboardEnabled)
-        Menu(L("Clipboard direction")) {
-            ForEach(ClipboardDirection.allCases) { d in
-                Toggle(d.label, isOn: pick(model.clipboardDirection == d) { model.clipboardDirection = d })
-            }
-        }
-        .disabled(!model.clipboardEnabled)
-        Toggle(L("Verify-code relay"), isOn: $model.verifyEnabled)
-        Toggle(L("Notification relay"), isOn: $model.notifyEnabled)
-        Toggle(L("Auto-reconnect last device"), isOn: $model.autoReconnect)
-        Menu(L("Mirror resolution")) {
-            ForEach(MirrorResolution.allCases) { r in
-                Toggle(r.label, isOn: pick(model.resolution == r) { model.setResolution(r) })
-            }
-        }
-        Button(L("Identity / account…")) { SettingsWindowController.shared.show() }
+        Button(L("Settings…")) { PreferencesWindowController.shared.show(model: model) }
+            .keyboardShortcut(",")
         if model.lastDevice != nil && !model.isConnected {
             Button(L("Forget device")) { model.forgetDevice() }
         }
@@ -65,11 +51,5 @@ struct MenuContent: View {
                 Button("\(L("Reconnect")) \(last.displayName)") { model.reconnectLast() }
             }
         }
-    }
-
-    /// A radio-style binding: reads `selected`; selecting it runs `choose` (turning a
-    /// Toggle on picks that option; turning it off is ignored).
-    private func pick(_ selected: Bool, _ choose: @escaping () -> Void) -> Binding<Bool> {
-        Binding(get: { selected }, set: { if $0 { choose() } })
     }
 }
