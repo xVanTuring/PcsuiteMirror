@@ -31,7 +31,6 @@
 "Auto-reconnect last device" = "自动重连上次设备";
 "Clipboard sync" = "剪贴板同步";
 "Verify-code relay" = "验证码接力";
-"Feature changes apply after reconnect" = "剪贴板 / 验证码改动将在重新连接后生效";
 "Forget device" = "忘记设备";
 
 /* clipboard direction */
@@ -54,6 +53,33 @@
 "Connection" = "连接";
 "Notification relay" = "通知接力";
 "Identity / account…" = "身份 / 账号…";
+
+/* QR pairing */
+"Pair via QR…" = "扫码配对…";
+"Pair via QR" = "扫码配对";
+"Scan to connect" = "扫码连接";
+"Scan to pair" = "扫码配对";
+"Waiting for the phone…" = "等待手机…";
+"On the phone, open vivo PCSuite → 扫码连接电脑 and scan this code." = "在手机上打开 vivo PCSuite → 扫码连接电脑，扫描此二维码。";
+
+/* device info */
+"Storage" = "存储";
+
+/* identity panel */
+"Identity" = "身份";
+"Account identity" = "账号身份";
+"Account openID" = "账号 openID";
+"Clipboard PC id" = "剪贴板 PC id";
+"Device name" = "设备名称";
+"PC MAC (optional)" = "PC MAC（可选）";
+"Account label (optional)" = "账号标签（可选）";
+"Connect without a seed (connectType=1)" = "无需 seed 连接（connectType=1）";
+"Per-phone seeds (connectType=2)" = "每台手机的 seed（connectType=2）";
+"Add phone seed" = "添加手机 seed";
+"seed UUID" = "seed UUID";
+"Recommended for a new device — needs only the openID. Turn off to use the per-phone seed below (connectType=2)." = "新设备推荐 — 仅需 openID。关闭则使用下方每台手机的 seed（connectType=2）。";
+"openID is per vivo-account (same for every phone on it), required for Wi-Fi connect AND clipboard (incl. USB — shared clipboard is account-scoped). Clipboard PC id must match the id the phone registered for this Mac at pairing, or phone→Mac clipboard won't sync. Mac/name aren't validated." = "openID 按 vivo 账号区分（同账号下所有手机相同），无线连接和剪贴板都需要（USB 也需要 — 超级剪贴板按账号隔离）。剪贴板 PC id 必须与手机配对时为本 Mac 注册的 id 一致，否则手机→Mac 剪贴板不同步。MAC / 名称不校验。";
+"Done" = "完成";
 
 /* verify-code notification */
 "Verification code" = "验证码";

@@ -31,7 +31,6 @@
 "Auto-reconnect last device" = "Auto-reconnect last device";
 "Clipboard sync" = "Clipboard sync";
 "Verify-code relay" = "Verify-code relay";
-"Feature changes apply after reconnect" = "Clipboard / verify changes apply after reconnect";
 "Forget device" = "Forget device";
 
 /* clipboard direction */

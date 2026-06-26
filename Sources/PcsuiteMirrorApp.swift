@@ -8,9 +8,12 @@ struct PcsuiteMirrorApp: App {
 
     var body: some Scene {
         // Standard menu-bar dropdown (native NSMenu): the content is built from
-        // Button / Toggle / Menu / Divider items.
-        MenuBarExtra("vi-conn", systemImage: "iphone") {
+        // Button / Toggle / Menu / Divider items. The icon reflects connection
+        // state so it's readable at a glance without opening the menu.
+        MenuBarExtra {
             MenuContent(model: model)
+        } label: {
+            Image(systemName: model.menuBarSymbol)
         }
     }
 }

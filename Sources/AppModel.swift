@@ -31,10 +31,12 @@ final class AppModel: ObservableObject {
 
     // Persisted preferences (default ON).
     @Published var autoReconnect: Bool { didSet { Store.autoReconnect = autoReconnect } }
-    @Published var clipboardEnabled: Bool { didSet { Store.clipboardEnabled = clipboardEnabled } }
-    @Published var clipboardDirection: ClipboardDirection { didSet { Store.clipboardDirection = clipboardDirection } }
-    @Published var verifyEnabled: Bool { didSet { Store.verifyEnabled = verifyEnabled } }
-    @Published var notifyEnabled: Bool { didSet { Store.notifyEnabled = notifyEnabled } }
+    // Feature toggles apply to a live session immediately (no reconnect needed);
+    // didSet only fires on user changes, never during init.
+    @Published var clipboardEnabled: Bool { didSet { Store.clipboardEnabled = clipboardEnabled; applyClipboardLive() } }
+    @Published var clipboardDirection: ClipboardDirection { didSet { Store.clipboardDirection = clipboardDirection; applyClipboardLive() } }
+    @Published var verifyEnabled: Bool { didSet { Store.verifyEnabled = verifyEnabled; if isConnected { controller.setVerify(enabled: verifyEnabled) } } }
+    @Published var notifyEnabled: Bool { didSet { Store.notifyEnabled = notifyEnabled; if isConnected { controller.setNotify(enabled: notifyEnabled) } } }
     @Published var lanIP: String { didSet { Store.lanIP = lanIP } }
     @Published private(set) var resolution: MirrorResolution
     @Published private(set) var lastDevice: DeviceRef?
@@ -104,6 +106,17 @@ final class AppModel: ObservableObject {
         case .disconnected: return "circle.dashed"
         }
     }
+    /// SF Symbol for the menu-bar icon — the only always-visible surface of a
+    /// menu-bar agent — so connection state reads at a glance without opening it.
+    /// Keeps the phone motif for the two "phone present / absent" states.
+    var menuBarSymbol: String {
+        switch state {
+        case .connected: return "iphone"
+        case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
+        case .failed: return "exclamationmark.triangle.fill"
+        case .disconnected: return "iphone.slash"
+        }
+    }
 
     private var features: ConnectFeatures {
         ConnectFeatures(
@@ -113,6 +126,15 @@ final class AppModel: ObservableObject {
             verify: verifyEnabled,
             notify: notifyEnabled
         )
+    }
+
+    /// Push the current clipboard enable/direction to a live session (no-op when
+    /// disconnected; the next connect applies it via `features`).
+    private func applyClipboardLive() {
+        guard isConnected else { return }
+        controller.setClipboard(enabled: clipboardEnabled,
+                                recv: clipboardDirection.recv,
+                                send: clipboardDirection.send)
     }
 
     // MARK: - Intents
@@ -175,6 +197,21 @@ final class AppModel: ObservableObject {
             self.reconnectAttempts += 1
             log("auto-reconnect attempt \(self.reconnectAttempts)/\(self.maxReconnectAttempts) → \(dev.displayName)")
             self.controller.connect(dev, features: self.features, reconnect: true)
+        }
+    }
+
+    // Auto-clears a stuck `.failed` status back to `.disconnected`. Bumped on each
+    // failure so a later connect attempt (which moves state off `.failed`) wins.
+    private var failedResetGen = 0
+
+    /// After a user-initiated connect failure, revert the menu status to
+    /// `Disconnected` shortly after — unless a new attempt already changed state.
+    private func scheduleFailedReset() {
+        failedResetGen += 1
+        let gen = failedResetGen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            guard let self, self.failedResetGen == gen, case .failed = self.state else { return }
+            self.state = .disconnected
         }
     }
 
@@ -265,9 +302,16 @@ final class AppModel: ObservableObject {
                 }
             case .disconnected:
                 self.deviceInfo = nil
-            case .failed:
+            case .failed(let message):
                 // A reconnect attempt failed: back off and retry, or give up.
-                guard self.reconnectDevice != nil else { break }
+                guard self.reconnectDevice != nil else {
+                    // User-initiated connect failed. The dropdown may be closed, so
+                    // surface the reason as a notification, and don't leave the menu
+                    // status stuck on "failed" forever.
+                    Notifier.postConnectFailure(message)
+                    self.scheduleFailedReset()
+                    break
+                }
                 if self.autoReconnect, self.reconnectAttempts < self.maxReconnectAttempts {
                     let backoff = min(8.0, pow(2.0, Double(self.reconnectAttempts - 1)))
                     log("auto-reconnect retry in \(Int(backoff))s")

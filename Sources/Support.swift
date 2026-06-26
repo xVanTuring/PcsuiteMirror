@@ -47,6 +47,17 @@ enum Notifier {
             .requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    /// Notify that a user-initiated connect attempt failed (the menu dropdown may
+    /// be closed, so the inline status text would go unseen).
+    static func postConnectFailure(_ message: String) {
+        let content = UNMutableNotificationContent()
+        content.title = L("Connection failed")
+        content.body = message
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+    }
+
     /// Post a local notification announcing a received SMS verify code.
     static func postCode(_ code: String) {
         let content = UNMutableNotificationContent()

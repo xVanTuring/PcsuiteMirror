@@ -120,8 +120,6 @@ struct PreferencesView: View {
                     Toggle(L("Notification relay"), isOn: $model.notifyEnabled)
                 } header: {
                     Text(L("Sync"))
-                } footer: {
-                    Text(L("Feature changes apply after reconnect"))
                 }
 
                 Section {

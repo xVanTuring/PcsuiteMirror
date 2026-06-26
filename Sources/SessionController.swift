@@ -271,6 +271,54 @@ final class SessionController {
         setSession(nil)                 // last ref → Rust Session drops → cleanup
     }
 
+    // MARK: - Live feature toggles (apply to a running session without a reconnect)
+
+    /// Enable/disable (or re-aim) clipboard sync on the live session. Re-arming with
+    /// new recv/send also covers a direction change. Safe no-op when disconnected.
+    func setClipboard(enabled: Bool, recv: Bool, send: Bool) {
+        queue.async { [self] in
+            guard let s = session else { return }
+            if enabled {
+                do { try s.enable_clipboard(recv, send) }
+                catch { log("clipboard enable failed: \(ffiMessage(error))") }
+            } else {
+                s.stop_clipboard()
+            }
+        }
+    }
+
+    /// Start/stop the verify-code relay on the live session (and its poll thread).
+    func setVerify(enabled: Bool) {
+        queue.async { [self] in
+            guard let s = session else { return }
+            if enabled {
+                guard verifyDone == nil else { return }   // already running
+                s.enable_verify()
+                startVerifyLoop(s)
+            } else if let done = verifyDone {
+                s.stop_verify()
+                done.wait()
+                verifyDone = nil
+            }
+        }
+    }
+
+    /// Start/stop the notification relay on the live session (and its poll thread).
+    func setNotify(enabled: Bool) {
+        queue.async { [self] in
+            guard let s = session else { return }
+            if enabled {
+                guard notifyDone == nil else { return }   // already running
+                s.enable_notify()
+                startNotifyLoop(s)
+            } else if let done = notifyDone {
+                s.stop_notify()
+                done.wait()
+                notifyDone = nil
+            }
+        }
+    }
+
     // MARK: - Mirroring
 
     func startMirror(maxSize: Int64) {
