@@ -20,7 +20,13 @@ final class HEVCFeeder {
     private var pps: Data?
     private var format: CMVideoFormatDescription?
 
-    // Stats accumulation (touched on the main thread, in the enqueue block).
+    // The layer decodes + displays on its own (VideoToolbox) threads; we feed it from
+    // this dedicated serial queue so the 60 fps pipeline never runs on the main thread,
+    // keeping the UI thread free for smooth animations. AVSampleBufferDisplayLayer is
+    // designed to be enqueued from a background queue (only its geometry needs main).
+    private let renderQueue = DispatchQueue(label: "tech.xvanturing.render", qos: .userInteractive)
+
+    // Stats accumulation (touched only on `renderQueue`).
     private var statWindowStart = CACurrentMediaTime()
     private var statFrames = 0
     private var statLatencySum = 0.0
@@ -46,7 +52,9 @@ final class HEVCFeeder {
         if format == nil { buildFormat() }
         guard let fmt = format, !vcl.isEmpty else { return }
         guard let sb = Self.makeSampleBuffer(vcl, fmt) else { return }
-        DispatchQueue.main.async { [weak self] in
+        // Feed off the main thread → the UI thread stays free, so chrome animations
+        // don't hitch behind a 60 fps enqueue.
+        renderQueue.async { [weak self] in
             guard let self else { return }
             if self.layer.status == .failed { self.layer.flush() }
             self.layer.enqueue(sb)
@@ -55,7 +63,7 @@ final class HEVCFeeder {
     }
 
     /// Accumulate one displayed frame and emit averaged stats about once a second.
-    /// Runs on the main thread (called from the enqueue block).
+    /// Runs on `renderQueue`; the stats callback is hopped to the main thread for the UI.
     private func recordStat(latencyMs: Double) {
         statFrames += 1
         statLatencySum += latencyMs
@@ -64,7 +72,7 @@ final class HEVCFeeder {
         if elapsed >= 1.0 {
             let fps = Double(statFrames) / elapsed
             let avgLatency = statFrames > 0 ? statLatencySum / Double(statFrames) : 0
-            onStats?(fps, avgLatency)
+            if let onStats { DispatchQueue.main.async { onStats(fps, avgLatency) } }
             statWindowStart = now
             statFrames = 0
             statLatencySum = 0
