@@ -233,7 +233,7 @@ final class MirrorContainerView: NSView {
     private(set) var progress: CGFloat = 0
     var onHover: ((Bool) -> Void)?
     private var tracking: NSTrackingArea?
-    private var animTimer: Timer?
+    private var shadowTimer: Timer?   // refreshes the native shadow while the CA grow runs
 
     init(video: MirrorInputView, chromeHost: NSView, overlayHost: NSView, progress: ChromeProgress) {
         self.video = video
@@ -283,45 +283,69 @@ final class MirrorContainerView: NSView {
         onHover?(nearEdge)
     }
 
-    /// Grow/shrink the frame layer with a per-frame timer; the picture stays fixed and we
-    /// re-derive the native window shadow as it grows. The window never moves, so there is
-    /// nothing to fall out of sync with.
-    ///
-    /// Two things keep this smooth while a 60 fps video decode shares the main thread:
-    /// the timer runs in `.common` modes (so it isn't starved during event tracking),
-    /// and `invalidateShadow()` — the expensive per-tick op (a WindowServer shadow
-    /// recompute) — is throttled to ~30 Hz instead of firing every frame.
+    /// Grow/shrink the frame layer (the picture stays fixed). The grow itself runs on
+    /// the render server via Core Animation — vsync-synced and OFF the main thread — so
+    /// a busy main thread (60 fps decode) can never make it stutter. The only main-
+    /// thread work left is re-deriving the native window shadow as the frame grows; we
+    /// do that on a light ~30 Hz timer for the animation's duration. A shadow that lags
+    /// a frame or two is imperceptible; a stuttering frame is not.
+    private let growDuration: CFTimeInterval = 0.24
+
     func setProgress(_ p: CGFloat, animated: Bool) {
-        animTimer?.invalidate(); animTimer = nil
+        shadowTimer?.invalidate(); shadowTimer = nil
         chromeProgress.p = p   // SwiftUI bars animate off this (its own .animation)
+        progress = p
+
+        let target = frameRect(for: p)
+        let targetSize = target.size
+        let targetPos = CGPoint(x: target.midX, y: target.midY)   // frameLayer anchor = (0.5,0.5)
+
         guard animated else {
-            progress = p; applyFrameLayer(); window?.invalidateShadow(); return
+            withoutImplicitAnimation {
+                frameLayer.removeAnimation(forKey: "grow")
+                frameLayer.bounds = CGRect(origin: .zero, size: targetSize)
+                frameLayer.position = targetPos
+            }
+            window?.invalidateShadow()
+            return
         }
-        let from = progress
+
+        // Start from whatever is currently on screen so an interrupted reveal flows
+        // instead of jumping, then set the model to its final value and let an explicit
+        // CA animation interpolate the presentation.
+        let pres = frameLayer.presentation()
+        let fromSize = pres?.bounds.size ?? frameLayer.bounds.size
+        let fromPos = pres?.position ?? frameLayer.position
+        withoutImplicitAnimation {
+            frameLayer.bounds = CGRect(origin: .zero, size: targetSize)
+            frameLayer.position = targetPos
+        }
+        let timing = CAMediaTimingFunction(name: .easeInEaseOut)
+        let sizeAnim = CABasicAnimation(keyPath: "bounds.size")
+        sizeAnim.fromValue = NSValue(size: fromSize)
+        sizeAnim.toValue = NSValue(size: targetSize)
+        let posAnim = CABasicAnimation(keyPath: "position")
+        posAnim.fromValue = NSValue(point: fromPos)
+        posAnim.toValue = NSValue(point: targetPos)
+        let group = CAAnimationGroup()
+        group.animations = [sizeAnim, posAnim]
+        group.duration = growDuration
+        group.timingFunction = timing
+        frameLayer.add(group, forKey: "grow")
+
+        // Track the native shadow to the growing frame at ~30 Hz for the duration.
+        window?.invalidateShadow()
         let start = Date()
-        let duration = 0.24
-        var lastShadow = Date.distantPast
-        let timer = Timer(timeInterval: 1.0 / 90.0, repeats: true) { [weak self] t in
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] t in
             guard let self else { t.invalidate(); return }
-            let raw = min(1.0, Date().timeIntervalSince(start) / duration)
-            let e = raw * raw * raw * (raw * (raw * 6 - 15) + 10) // smootherstep
-            self.progress = from + (p - from) * e
-            self.applyFrameLayer()
-            let now = Date()
-            if raw >= 1 || now.timeIntervalSince(lastShadow) >= 1.0 / 30.0 {
+            self.window?.invalidateShadow()
+            if Date().timeIntervalSince(start) >= self.growDuration {
+                t.invalidate(); self.shadowTimer = nil
                 self.window?.invalidateShadow()
-                lastShadow = now
-            }
-            if raw >= 1 {
-                self.progress = p
-                self.applyFrameLayer()
-                self.window?.invalidateShadow()
-                t.invalidate(); self.animTimer = nil
             }
         }
-        // .common so the grow keeps animating during mouse-move / tracking, not just idle.
         RunLoop.main.add(timer, forMode: .common)
-        animTimer = timer
+        shadowTimer = timer
     }
 
     override func layout() {
