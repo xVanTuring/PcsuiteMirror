@@ -40,6 +40,11 @@ final class AppModel: ObservableObject {
     @Published var lanIP: String { didSet { Store.lanIP = lanIP } }
     @Published private(set) var resolution: MirrorResolution
     @Published private(set) var lastDevice: DeviceRef?
+    /// The remembered-device roster (device-centric; most-recent first).
+    @Published private(set) var knownDevices: [KnownDevice]
+    /// Id of the currently connected device (nil when disconnected). Set provisionally
+    /// on connect, confirmed once `/base-info` returns the real id.
+    @Published private(set) var activeDeviceId: String?
 
     private let controller = SessionController()
     private lazy var mirror = MirrorWindowManager(model: self)
@@ -68,6 +73,7 @@ final class AppModel: ObservableObject {
         lanIP = Store.lanIP
         resolution = Store.resolution
         lastDevice = Store.lastDevice
+        knownDevices = Store.knownDevices
         wire()
         if autoReconnect, let dev = lastDevice {
             controller.connect(dev, features: features, reconnect: true)
@@ -151,10 +157,27 @@ final class AppModel: ObservableObject {
         controller.connect(DeviceRef(transport: .lan, ip: ip), features: features, reconnect: false)
     }
 
-    func reconnectLast() {
-        guard let dev = lastDevice else { return }
+    /// Connect a remembered device over the chosen transport. Wi-Fi uses the
+    /// device's last-known IP; USB connects to whatever phone is on the cable.
+    func connect(_ device: KnownDevice, method: Transport) {
         cancelReconnect()
-        controller.connect(dev, features: features, reconnect: false)
+        let ref: DeviceRef
+        switch method {
+        case .usb: ref = DeviceRef(transport: .usb, ip: nil, name: device.name)
+        case .lan: ref = DeviceRef(transport: .lan, ip: device.lastIP, name: device.name)
+        }
+        controller.connect(ref, features: features, reconnect: false)
+    }
+
+    /// Drop a device from the roster (and the auto-reconnect target if it was this one).
+    func forget(_ device: KnownDevice) {
+        knownDevices.removeAll { $0.id == device.id }
+        Store.knownDevices = knownDevices
+        if let last = lastDevice, device.matches(last) {
+            lastDevice = nil
+            Store.lastDevice = nil
+        }
+        if activeDeviceId == device.id { activeDeviceId = nil }
     }
 
     /// QR pairing (local `ls=true`): show a QR for the phone to scan; on scan the
@@ -224,7 +247,25 @@ final class AppModel: ObservableObject {
     }
     func startMirror() { controller.startMirror(maxSize: resolution.maxSize) }
     func stopMirror() { controller.stopMirror() }
-    func forgetDevice() { lastDevice = nil; Store.lastDevice = nil }
+
+    /// Upsert the just-connected device into the roster, keyed by its stable device
+    /// id (from `/base-info`). Records the name + (for Wi-Fi) the IP so the next
+    /// connect can offer it. Most-recently-connected sorts first.
+    private func rememberConnectedDevice(_ info: PhoneInfo) {
+        guard !info.deviceId.isEmpty else { return }
+        activeDeviceId = info.deviceId
+        var dev = knownDevices.first { $0.id == info.deviceId }
+            ?? KnownDevice(id: info.deviceId, name: info.name, lastIP: nil, lastTransport: nil)
+        if !info.name.isEmpty { dev.name = info.name }
+        if let ref = lastDevice {
+            dev.lastTransport = ref.transport
+            if ref.transport == .lan, let ip = ref.ip, !ip.isEmpty { dev.lastIP = ip }
+        }
+        knownDevices.removeAll { $0.id == dev.id }
+        knownDevices.insert(dev, at: 0)
+        Store.knownDevices = knownDevices
+        log("roster upsert: \(dev.name) [\(dev.id)] → \(knownDevices.count) device(s)")
+    }
 
     /// Change mirror resolution; restarts the live stream if mirroring.
     func setResolution(_ r: MirrorResolution) {
@@ -294,6 +335,9 @@ final class AppModel: ObservableObject {
             case .connected(let d):
                 self.lastDevice = d
                 Store.lastDevice = d
+                // Highlight the matching roster entry right away; `/base-info` will
+                // confirm/correct the id shortly via rememberConnectedDevice.
+                self.activeDeviceId = self.knownDevices.first { $0.matches(d) }?.id
                 if self.reconnectDevice != nil { log("auto-reconnect succeeded") }
                 self.cancelReconnect()
                 // Resume mirroring if the window is still open after a recovered drop.
@@ -302,6 +346,7 @@ final class AppModel: ObservableObject {
                 }
             case .disconnected:
                 self.deviceInfo = nil
+                self.activeDeviceId = nil
             case .failed(let message):
                 // A reconnect attempt failed: back off and retry, or give up.
                 guard self.reconnectDevice != nil else {
@@ -361,6 +406,7 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             self.deviceInfo = info
             self.autoFillOpenID(info.openID)
+            self.rememberConnectedDevice(info)
         }
     }
 

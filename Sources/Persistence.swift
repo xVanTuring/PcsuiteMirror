@@ -25,6 +25,28 @@ struct DeviceRef: Codable, Equatable {
     }
 }
 
+/// A remembered phone, keyed by its stable unique device id (`mobileDeviceId`).
+/// Device-centric: one entry per physical phone, regardless of how it's reached.
+/// `lastIP` enables Wi-Fi reconnect; USB connects to whatever phone is on the cable.
+struct KnownDevice: Codable, Equatable, Identifiable {
+    var id: String                  // phone mobileDeviceId — stable + unique
+    var name: String                // display name, e.g. "iQOO 15"
+    var lastIP: String?             // last LAN IP seen (for "Connect over Wi-Fi")
+    var lastTransport: Transport?   // how it was last reached
+
+    /// Menu label: the name, falling back to the id if unnamed.
+    var menuLabel: String { name.isEmpty ? id : name }
+
+    /// Whether a (transient) connect target plausibly refers to this device —
+    /// used to highlight the active device in the brief window before `/base-info`
+    /// returns the real id.
+    func matches(_ ref: DeviceRef) -> Bool {
+        if let n = ref.name, !n.isEmpty, n == name { return true }
+        if ref.transport == .lan, let ip = ref.ip, !ip.isEmpty, ip == lastIP { return true }
+        return false
+    }
+}
+
 /// A per-phone pairing seed (historyPhone `ext.seeds`) for the LAN connectType=2
 /// path. Keyed by the phone's LAN IP. Not needed when using connectType=1.
 struct SeedEntry: Codable, Equatable, Identifiable {
@@ -73,9 +95,12 @@ struct PhoneInfo: Equatable {
     /// Real vivo-account openId (16-hex) reported by the phone; "" if not logged in
     /// or an older core. Used to self-fill the pairing identity (see AppModel).
     var openID: String = ""
+    /// Phone's stable unique device id (`mobileDeviceId`); "" on an older core. Keys
+    /// the per-device roster (see `KnownDevice`).
+    var deviceId: String = ""
 
     /// Parse the `device_info()` payload: tab-separated fields in a fixed order
-    /// (12 legacy fields + an optional 13th `openID`).
+    /// (12 legacy fields + optional 13th `openID` + optional 14th `deviceId`).
     static func parse(_ s: String) -> PhoneInfo? {
         let f = s.components(separatedBy: "\t")
         guard f.count >= 12 else { return nil }
@@ -85,7 +110,8 @@ struct PhoneInfo: Equatable {
             foldScreen: f[7] == "1",
             totalStorageGB: f[8], availableStorageGB: f[9],
             availableBytes: Int64(f[10]) ?? 0, account: f[11],
-            openID: f.count > 12 ? f[12] : ""
+            openID: f.count > 12 ? f[12] : "",
+            deviceId: f.count > 13 ? f[13] : ""
         )
     }
 
@@ -160,6 +186,15 @@ enum Store {
                 d.removeObject(forKey: "lastDevice")
             }
         }
+    }
+    /// The device roster (most-recently-connected first). Populated on each
+    /// successful connect once `/base-info` returns the phone's device id.
+    static var knownDevices: [KnownDevice] {
+        get {
+            guard let data = d.data(forKey: "knownDevices") else { return [] }
+            return (try? JSONDecoder().decode([KnownDevice].self, from: data)) ?? []
+        }
+        set { d.set(try? JSONEncoder().encode(newValue), forKey: "knownDevices") }
     }
 
     // MARK: - LAN pairing identity (only the LAN path needs these; USB ignores them)

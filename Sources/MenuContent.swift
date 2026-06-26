@@ -15,9 +15,6 @@ struct MenuContent: View {
         Divider()
         Button(L("Settings…")) { PreferencesWindowController.shared.show(model: model) }
             .keyboardShortcut(",")
-        if model.lastDevice != nil && !model.isConnected {
-            Button(L("Forget device")) { model.forgetDevice() }
-        }
 
         Divider()
         Button(L("Quit")) { NSApp.terminate(nil) }
@@ -25,31 +22,48 @@ struct MenuContent: View {
     }
 
     @ViewBuilder private var connectionItems: some View {
-        if model.isConnected {
-            if let info = model.deviceInfo {
-                Text("\(info.name) · \(L("Storage")) \(info.storageSummary)")
-            }
-            Button(model.mirroring ? L("Stop mirroring") : L("Start mirroring")) {
-                if model.mirroring { model.closeMirror() } else { model.openMirror() }
-            }
-            if let code = model.lastCode {
-                Text("\(L("Last code")): \(code)")
-            }
-            Button(L("Disconnect")) { model.disconnect() }
-        } else if model.isBusy {
+        if model.isBusy {
             Button(L("Cancel")) { model.cancelConnect() }
         } else {
-            Button(L("Connect via USB")) { model.connectUSB() }
-            Button(L("Pair via QR…")) { model.pairQR() }
+            // Device-centric: one submenu per remembered phone. The active device
+            // exposes mirror/disconnect; the others expose connect options.
+            ForEach(model.knownDevices) { dev in
+                Menu(deviceLabel(dev)) { deviceMenu(dev) }
+            }
+            if !model.knownDevices.isEmpty { Divider() }
+            // Add / connect a device not in the roster yet.
+            Button(L("Pair new device (QR)…")) { model.pairQR() }
+            Button(L("Connect over USB")) { model.connectUSB() }
             Button(L("Connect over Wi-Fi…")) {
                 if let ip = promptForIP(default: model.lanIP) {
                     let t = ip.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !t.isEmpty { model.lanIP = t; model.connectLAN() }
                 }
             }
-            if let last = model.lastDevice {
-                Button("\(L("Reconnect")) \(last.displayName)") { model.reconnectLast() }
-            }
         }
+    }
+
+    /// Roster row label: device name, with a check mark when it's the active one.
+    private func deviceLabel(_ dev: KnownDevice) -> String {
+        (model.isConnected && dev.id == model.activeDeviceId) ? "✓ \(dev.menuLabel)" : dev.menuLabel
+    }
+
+    /// The expanded actions for one remembered device.
+    @ViewBuilder private func deviceMenu(_ dev: KnownDevice) -> some View {
+        if model.isConnected && dev.id == model.activeDeviceId {
+            if let info = model.deviceInfo {
+                Text("\(L("Storage")) \(info.storageSummary)")
+            }
+            Button(model.mirroring ? L("Stop mirroring") : L("Start mirroring")) {
+                if model.mirroring { model.closeMirror() } else { model.openMirror() }
+            }
+            Button(L("Disconnect")) { model.disconnect() }
+        } else {
+            Button(L("Connect over Wi-Fi")) { model.connect(dev, method: .lan) }
+                .disabled((dev.lastIP ?? "").isEmpty)
+            Button(L("Connect over USB")) { model.connect(dev, method: .usb) }
+        }
+        Divider()
+        Button(L("Forget this device")) { model.forget(dev) }
     }
 }

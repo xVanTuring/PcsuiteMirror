@@ -523,9 +523,17 @@ final class SessionController {
     /// not run on `queue` (which serializes the mirror/input lifecycle) or main.
     private func fetchDeviceInfo(_ s: PcSession) {
         Thread.detachNewThread { [weak self] in
-            guard let rs = try? s.device_info(),
-                  let info = PhoneInfo.parse(rs.toString()) else { return }
-            self?.emit { self?.onDeviceInfo?(info) }
+            do {
+                let raw = try s.device_info().toString()
+                guard let info = PhoneInfo.parse(raw) else {
+                    log("device_info: unparseable payload")
+                    return
+                }
+                if info.deviceId.isEmpty { log("device_info: no device id (older core or unresolved)") }
+                self?.emit { self?.onDeviceInfo?(info) }
+            } catch {
+                log("device_info failed: \(ffiMessage(error))")
+            }
         }
     }
 

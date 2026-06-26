@@ -11,8 +11,11 @@
 
 /* connect actions */
 "Connect via USB" = "Connect via USB";
+"Connect over USB" = "Connect over USB";
 "Connect over Wi-Fi…" = "Connect over Wi-Fi…";
 "Connect over Wi-Fi" = "Connect over Wi-Fi";
+"Pair new device (QR)…" = "Pair new device (QR)…";
+"Forget this device" = "Forget this device";
 "Enter the phone's IP address" = "Enter the phone's IP address";
 "Clipboard direction" = "Clipboard direction";
 "Phone IP" = "Phone IP";
