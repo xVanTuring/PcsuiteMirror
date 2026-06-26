@@ -43,6 +43,7 @@
 
 /* mirror resolution */
 "Mirror resolution" = "投屏分辨率";
+"Show FPS & latency" = "显示 FPS 与延迟";
 "High (full)" = "高（原始）";
 "Medium (1280)" = "中（1280）";
 "Low (720)" = "低（720）";

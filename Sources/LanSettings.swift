@@ -127,6 +127,7 @@ struct PreferencesView: View {
                     Picker(L("Mirror resolution"), selection: resolution) {
                         ForEach(MirrorResolution.allCases) { Text($0.label).tag($0) }
                     }
+                    Toggle(L("Show FPS & latency"), isOn: $model.showStats)
                 } header: {
                     Text(L("Connection"))
                 }

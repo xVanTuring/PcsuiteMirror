@@ -19,6 +19,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var displayLayer: AVSampleBufferDisplayLayer?
     @Published private(set) var videoSize: CGSize = .zero
     @Published private(set) var frameCount = 0
+    /// Live playback stats (0 when not mirroring). `mirrorLatencyMs` is the PC
+    /// pipeline cost (frame off the core → enqueued for display), not glass-to-glass.
+    @Published private(set) var mirrorFPS: Double = 0
+    @Published private(set) var mirrorLatencyMs: Double = 0
     @Published private(set) var lastCode: String?
     /// Phone-reported secure-screen token ("" / "clear" = none; "password",
     /// "safety", "lockScreen" = a privacy screen the phone handles itself).
@@ -37,6 +41,8 @@ final class AppModel: ObservableObject {
     @Published var clipboardDirection: ClipboardDirection { didSet { Store.clipboardDirection = clipboardDirection; applyClipboardLive() } }
     @Published var verifyEnabled: Bool { didSet { Store.verifyEnabled = verifyEnabled; if isConnected { controller.setVerify(enabled: verifyEnabled) } } }
     @Published var notifyEnabled: Bool { didSet { Store.notifyEnabled = notifyEnabled; if isConnected { controller.setNotify(enabled: notifyEnabled) } } }
+    /// Show the FPS / latency HUD over the mirror picture.
+    @Published var showStats: Bool { didSet { Store.showStats = showStats } }
     @Published var lanIP: String { didSet { Store.lanIP = lanIP } }
     @Published private(set) var resolution: MirrorResolution
     @Published private(set) var lastDevice: DeviceRef?
@@ -70,6 +76,7 @@ final class AppModel: ObservableObject {
         clipboardDirection = Store.clipboardDirection
         verifyEnabled = Store.verifyEnabled
         notifyEnabled = Store.notifyEnabled
+        showStats = Store.showStats
         lanIP = Store.lanIP
         resolution = Store.resolution
         lastDevice = Store.lastDevice
@@ -378,7 +385,14 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             self.mirroring = on
             self.displayLayer = layer
-            if !on { self.frameCount = 0; self.videoSize = .zero; self.privacyState = "" }
+            if !on {
+                self.frameCount = 0; self.videoSize = .zero; self.privacyState = ""
+                self.mirrorFPS = 0; self.mirrorLatencyMs = 0
+            }
+        }
+        controller.onStats = { [weak self] fps, lat in
+            self?.mirrorFPS = fps
+            self?.mirrorLatencyMs = lat
         }
         controller.onPrivacy = { [weak self] tok in self?.privacyState = tok }
         controller.onInputState = { [weak self] active, hasCaret, x, y in

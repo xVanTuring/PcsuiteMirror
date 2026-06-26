@@ -162,6 +162,10 @@ enum Store {
         get { flag("notifyEnabled", default: true) }
         set { d.set(newValue, forKey: "notifyEnabled") }
     }
+    static var showStats: Bool {
+        get { flag("showStats", default: false) }
+        set { d.set(newValue, forKey: "showStats") }
+    }
     static var lanIP: String {
         get { d.string(forKey: "lanIP") ?? "" }
         set { d.set(newValue, forKey: "lanIP") }

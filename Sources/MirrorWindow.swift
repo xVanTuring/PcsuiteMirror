@@ -7,6 +7,7 @@ private let kCorner: CGFloat = 18      // screen + outer-frame corner
 private let kBar: CGFloat = 34         // title-bar height (taller → easier to grab + drag)
 private let kInset: CGFloat = 6        // frame margin around the screen (sides)
 private let kNav: CGFloat = 38         // bottom navigation-key bar height
+private let kEdgeReveal: CGFloat = 84  // pointer distance from picture top/bottom that reveals the chrome
 
 /// Android `KeyEvent` codes for the on-screen navigation keys.
 enum AndroidKey {
@@ -162,16 +163,52 @@ struct ReconnectOverlay: View {
     }
 }
 
-/// Stacks the privacy and reconnect overlays in the one overlay host (privacy on
-/// top — a secure screen takes precedence over a reconnect hint).
+// MARK: - Stats HUD (FPS + PC pipeline latency, toggled in Settings)
+
+/// Drives the FPS / latency HUD. `latencyMs` is the PC-side pipeline cost (frame
+/// off the core → enqueued for display), not glass-to-glass.
+final class StatsOverlayModel: ObservableObject {
+    @Published var visible = false
+    @Published var fps: Double = 0
+    @Published var latencyMs: Double = 0
+}
+
+/// A small unobtrusive HUD in the top-left of the picture showing live FPS and the
+/// render-pipeline latency. Never intercepts clicks (they pass through to the phone).
+struct StatsOverlay: View {
+    @ObservedObject var model: StatsOverlayModel
+
+    var body: some View {
+        ZStack {
+            if model.visible {
+                Text("\(Int(model.fps.rounded())) FPS · \(Int(model.latencyMs.rounded())) ms")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.95))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.black.opacity(0.55)))
+                    .padding(8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .transition(.opacity)
+            }
+        }
+        .allowsHitTesting(false)
+        .animation(.easeInOut(duration: 0.2), value: model.visible)
+    }
+}
+
+/// Stacks the overlays in the one overlay host: reconnect (bottom), privacy (a
+/// secure screen takes precedence), and the stats HUD on top.
 struct MirrorOverlays: View {
     @ObservedObject var privacy: PrivacyOverlayModel
     @ObservedObject var link: LinkOverlayModel
+    @ObservedObject var stats: StatsOverlayModel
 
     var body: some View {
         ZStack {
             ReconnectOverlay(model: link)
             PrivacyOverlay(model: privacy)
+            StatsOverlay(model: stats)
         }
     }
 }
@@ -228,13 +265,23 @@ final class MirrorContainerView: NSView {
         super.updateTrackingAreas()
         if let t = tracking { removeTrackingArea(t) }
         let t = NSTrackingArea(rect: .zero,
-                               options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+                               options: [.activeAlways, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
                                owner: self, userInfo: nil)
         addTrackingArea(t)
         tracking = t
     }
-    override func mouseEntered(with e: NSEvent) { onHover?(true) }
+    override func mouseEntered(with e: NSEvent) { updateReveal(e) }
+    override func mouseMoved(with e: NSEvent) { updateReveal(e) }
     override func mouseExited(with e: NSEvent) { onHover?(false) }
+
+    /// Reveal the chrome only when the pointer is near the picture's top or bottom
+    /// edge (video-player style), not on any hover over the window.
+    private func updateReveal(_ e: NSEvent) {
+        let p = convert(e.locationInWindow, from: nil)   // container coords (bottom-left)
+        let f = video.frame
+        let nearEdge = p.y <= f.minY + kEdgeReveal || p.y >= f.maxY - kEdgeReveal
+        onHover?(nearEdge)
+    }
 
     /// Grow/shrink the frame layer with a per-frame timer; the picture stays fixed and we
     /// re-derive the native window shadow each tick. The window never moves, so there is
@@ -721,6 +768,7 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
     private let chromeProgress = ChromeProgress()
     private let privacyOverlay = PrivacyOverlayModel()
     private let linkOverlay = LinkOverlayModel()
+    private let statsOverlay = StatsOverlayModel()
     private var bag = Set<AnyCancellable>()
     private var baseScreenH: CGFloat = 640   // screen height in points; window = screen + chrome
 
@@ -764,7 +812,7 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
             onKey: { [weak self] code in self?.model.key(code) }
         ))
 
-        let overlayHost = NSHostingView(rootView: MirrorOverlays(privacy: privacyOverlay, link: linkOverlay))
+        let overlayHost = NSHostingView(rootView: MirrorOverlays(privacy: privacyOverlay, link: linkOverlay, stats: statsOverlay))
         overlayHost.layer?.backgroundColor = .clear
 
         let container = MirrorContainerView(video: video, chromeHost: chromeHost, overlayHost: overlayHost, progress: chromeProgress)
@@ -802,6 +850,18 @@ final class MirrorWindowManager: NSObject, NSWindowDelegate {
         model.$mirrorLink
             .receive(on: RunLoop.main)
             .sink { [weak self] link in self?.linkOverlay.link = link }
+            .store(in: &bag)
+        model.$showStats
+            .receive(on: RunLoop.main)
+            .sink { [weak self] on in self?.statsOverlay.visible = on }
+            .store(in: &bag)
+        model.$mirrorFPS
+            .receive(on: RunLoop.main)
+            .sink { [weak self] v in self?.statsOverlay.fps = v }
+            .store(in: &bag)
+        model.$mirrorLatencyMs
+            .receive(on: RunLoop.main)
+            .sink { [weak self] v in self?.statsOverlay.latencyMs = v }
             .store(in: &bag)
         // Phone caret → place the IME there (mapped to view coords in firstRect).
         model.imeCursorSink = { [weak self] p in self?.video?.imeAnchorVideo = p }

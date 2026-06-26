@@ -39,6 +39,9 @@ final class SessionController {
     var onMirroring: ((Bool, AVSampleBufferDisplayLayer?) -> Void)?
     var onFrameCount: ((Int) -> Void)?
     var onFormat: ((Int, Int) -> Void)?
+    /// Throttled playback stats `(fps, pipelineLatencyMs)`, delivered on the main
+    /// queue while mirroring.
+    var onStats: ((Double, Double) -> Void)?
     var onVerifyCode: ((String) -> Void)?
     /// A phone notification was forwarded: `(appName, title, content)`. Delivered on
     /// the main queue while connected (if the notify feature is armed).
@@ -346,6 +349,7 @@ final class SessionController {
                     tally += 1                       // onEnqueue fires on the main queue
                     self?.onFrameCount?(tally)
                 }
+                f.onStats = { [weak self] fps, lat in self?.onStats?(fps, lat) }   // already on main
                 screen = sc
                 feeder = f
                 mirrorGen += 1

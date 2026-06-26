@@ -43,6 +43,7 @@
 
 /* mirror resolution */
 "Mirror resolution" = "Mirror resolution";
+"Show FPS & latency" = "Show FPS & latency";
 "High (full)" = "High (full)";
 "Medium (1280)" = "Medium (1280)";
 "Low (720)" = "Low (720)";

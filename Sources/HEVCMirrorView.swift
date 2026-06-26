@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import VideoToolbox
+import QuartzCore
 
 /// Turns raw HEVC Annex-B access units (what `PcScreen.next_frame()` delivers) into
 /// `CMSampleBuffer`s and feeds an `AVSampleBufferDisplayLayer`, which decodes +
@@ -10,11 +11,20 @@ final class HEVCFeeder {
     let layer = AVSampleBufferDisplayLayer()
     var onFormat: ((Int, Int) -> Void)?
     var onEnqueue: (() -> Void)?
+    /// Throttled (~1 Hz, main thread) playback stats: `(fps, pipelineLatencyMs)`.
+    /// Latency is the PC-side cost — frame arrival off the core → enqueued for
+    /// display — not glass-to-glass (the stream carries no phone timestamp).
+    var onStats: ((Double, Double) -> Void)?
 
     private var vps: Data?
     private var sps: Data?
     private var pps: Data?
     private var format: CMVideoFormatDescription?
+
+    // Stats accumulation (touched on the main thread, in the enqueue block).
+    private var statWindowStart = CACurrentMediaTime()
+    private var statFrames = 0
+    private var statLatencySum = 0.0
 
     init() {
         layer.videoGravity = .resizeAspect
@@ -22,6 +32,7 @@ final class HEVCFeeder {
 
     /// Called on the frame-pump thread with one access unit.
     func handle(_ au: Data) {
+        let received = CACurrentMediaTime()
         var vcl: [Data] = []
         for nal in Self.splitAnnexB(au) {
             guard let first = nal.first else { continue }
@@ -36,12 +47,29 @@ final class HEVCFeeder {
         if format == nil { buildFormat() }
         guard let fmt = format, !vcl.isEmpty else { return }
         guard let sb = Self.makeSampleBuffer(vcl, fmt) else { return }
-        let layer = self.layer
-        let onEnqueue = self.onEnqueue
-        DispatchQueue.main.async {
-            if layer.status == .failed { layer.flush() }
-            layer.enqueue(sb)
-            onEnqueue?()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.layer.status == .failed { self.layer.flush() }
+            self.layer.enqueue(sb)
+            self.onEnqueue?()
+            self.recordStat(latencyMs: (CACurrentMediaTime() - received) * 1000)
+        }
+    }
+
+    /// Accumulate one displayed frame and emit averaged stats about once a second.
+    /// Runs on the main thread (called from the enqueue block).
+    private func recordStat(latencyMs: Double) {
+        statFrames += 1
+        statLatencySum += latencyMs
+        let now = CACurrentMediaTime()
+        let elapsed = now - statWindowStart
+        if elapsed >= 1.0 {
+            let fps = Double(statFrames) / elapsed
+            let avgLatency = statFrames > 0 ? statLatencySum / Double(statFrames) : 0
+            onStats?(fps, avgLatency)
+            statWindowStart = now
+            statFrames = 0
+            statLatencySum = 0
         }
     }
 
