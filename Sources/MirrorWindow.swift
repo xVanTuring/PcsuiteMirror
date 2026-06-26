@@ -292,6 +292,11 @@ final class MirrorContainerView: NSView {
     private let growDuration: CFTimeInterval = 0.24
 
     func setProgress(_ p: CGFloat, animated: Bool) {
+        // mouseMoved fires continuously while the pointer is in the reveal zone, so
+        // onHover calls this many times/sec with the SAME target. Re-adding the CA
+        // animation each time restarts the curve every frame → it never settles and
+        // reads as a stutter. Ignore no-op calls; only act on a real state change.
+        guard p != progress else { return }
         shadowTimer?.invalidate(); shadowTimer = nil
         chromeProgress.p = p   // SwiftUI bars animate off this (its own .animation)
         progress = p
