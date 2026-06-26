@@ -37,7 +37,6 @@ final class SessionController {
     // Delivered on the main queue.
     var onState: ((ConnState) -> Void)?
     var onMirroring: ((Bool, AVSampleBufferDisplayLayer?) -> Void)?
-    var onFrameCount: ((Int) -> Void)?
     var onFormat: ((Int, Int) -> Void)?
     /// Throttled playback stats `(fps, pipelineLatencyMs)`, delivered on the main
     /// queue while mirroring.
@@ -344,11 +343,6 @@ final class SessionController {
             let sc = try s.start_screen(maxSize)
             let f = HEVCFeeder()
                 f.onFormat = { [weak self] w, h in self?.emit { self?.onFormat?(w, h) } }
-                var tally = 0
-                f.onEnqueue = { [weak self] in
-                    tally += 1                       // onEnqueue fires on the main queue
-                    self?.onFrameCount?(tally)
-                }
                 f.onStats = { [weak self] fps, lat in self?.onStats?(fps, lat) }   // already on main
                 screen = sc
                 feeder = f

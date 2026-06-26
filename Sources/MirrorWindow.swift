@@ -284,8 +284,13 @@ final class MirrorContainerView: NSView {
     }
 
     /// Grow/shrink the frame layer with a per-frame timer; the picture stays fixed and we
-    /// re-derive the native window shadow each tick. The window never moves, so there is
+    /// re-derive the native window shadow as it grows. The window never moves, so there is
     /// nothing to fall out of sync with.
+    ///
+    /// Two things keep this smooth while a 60 fps video decode shares the main thread:
+    /// the timer runs in `.common` modes (so it isn't starved during event tracking),
+    /// and `invalidateShadow()` — the expensive per-tick op (a WindowServer shadow
+    /// recompute) — is throttled to ~30 Hz instead of firing every frame.
     func setProgress(_ p: CGFloat, animated: Bool) {
         animTimer?.invalidate(); animTimer = nil
         chromeProgress.p = p   // SwiftUI bars animate off this (its own .animation)
@@ -295,13 +300,18 @@ final class MirrorContainerView: NSView {
         let from = progress
         let start = Date()
         let duration = 0.24
-        animTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120.0, repeats: true) { [weak self] t in
+        var lastShadow = Date.distantPast
+        let timer = Timer(timeInterval: 1.0 / 90.0, repeats: true) { [weak self] t in
             guard let self else { t.invalidate(); return }
             let raw = min(1.0, Date().timeIntervalSince(start) / duration)
             let e = raw * raw * raw * (raw * (raw * 6 - 15) + 10) // smootherstep
             self.progress = from + (p - from) * e
             self.applyFrameLayer()
-            self.window?.invalidateShadow()
+            let now = Date()
+            if raw >= 1 || now.timeIntervalSince(lastShadow) >= 1.0 / 30.0 {
+                self.window?.invalidateShadow()
+                lastShadow = now
+            }
             if raw >= 1 {
                 self.progress = p
                 self.applyFrameLayer()
@@ -309,6 +319,9 @@ final class MirrorContainerView: NSView {
                 t.invalidate(); self.animTimer = nil
             }
         }
+        // .common so the grow keeps animating during mouse-move / tracking, not just idle.
+        RunLoop.main.add(timer, forMode: .common)
+        animTimer = timer
     }
 
     override func layout() {

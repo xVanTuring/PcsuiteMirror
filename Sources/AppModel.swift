@@ -18,7 +18,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var mirroring = false
     @Published private(set) var displayLayer: AVSampleBufferDisplayLayer?
     @Published private(set) var videoSize: CGSize = .zero
-    @Published private(set) var frameCount = 0
     /// Live playback stats (0 when not mirroring). `mirrorLatencyMs` is the PC
     /// pipeline cost (frame off the core → enqueued for display), not glass-to-glass.
     @Published private(set) var mirrorFPS: Double = 0
@@ -386,7 +385,7 @@ final class AppModel: ObservableObject {
             self.mirroring = on
             self.displayLayer = layer
             if !on {
-                self.frameCount = 0; self.videoSize = .zero; self.privacyState = ""
+                self.videoSize = .zero; self.privacyState = ""
                 self.mirrorFPS = 0; self.mirrorLatencyMs = 0
             }
         }
@@ -404,7 +403,6 @@ final class AppModel: ObservableObject {
                 self.imeCursorSink?(CGPoint(x: x, y: y))
             }
         }
-        controller.onFrameCount = { [weak self] c in self?.frameCount = c }
         controller.onFormat = { [weak self] w, h in
             self?.videoSize = CGSize(width: w, height: h)
         }

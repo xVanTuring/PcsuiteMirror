@@ -10,7 +10,6 @@ import QuartzCore
 final class HEVCFeeder {
     let layer = AVSampleBufferDisplayLayer()
     var onFormat: ((Int, Int) -> Void)?
-    var onEnqueue: (() -> Void)?
     /// Throttled (~1 Hz, main thread) playback stats: `(fps, pipelineLatencyMs)`.
     /// Latency is the PC-side cost — frame arrival off the core → enqueued for
     /// display — not glass-to-glass (the stream carries no phone timestamp).
@@ -51,7 +50,6 @@ final class HEVCFeeder {
             guard let self else { return }
             if self.layer.status == .failed { self.layer.flush() }
             self.layer.enqueue(sb)
-            self.onEnqueue?()
             self.recordStat(latencyMs: (CACurrentMediaTime() - received) * 1000)
         }
     }
