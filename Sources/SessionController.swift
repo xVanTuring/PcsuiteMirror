@@ -323,24 +323,24 @@ final class SessionController {
 
     // MARK: - Mirroring
 
-    func startMirror(maxSize: Int64) {
-        queue.async { [self] in startMirrorLocked(maxSize: maxSize) }
+    func startMirror(settings: MirrorSettings) {
+        queue.async { [self] in startMirrorLocked(settings: settings) }
     }
 
-    /// Apply a new resolution to a live mirror: stop the current stream and reopen
-    /// it with the new `max_size` (SCREEN_START params are fixed per stream).
-    func restartMirror(maxSize: Int64) {
+    /// Apply new encoder settings to a live mirror: stop the current stream and
+    /// reopen it (SCREEN_START params are fixed per stream).
+    func restartMirror(settings: MirrorSettings) {
         queue.async { [self] in
             guard screen != nil else { return }
             stopMirrorLocked()
-            startMirrorLocked(maxSize: maxSize)
+            startMirrorLocked(settings: settings)
         }
     }
 
-    private func startMirrorLocked(maxSize: Int64) {
+    private func startMirrorLocked(settings: MirrorSettings) {
         guard let s = session, screen == nil else { return }
         do {
-            let sc = try s.start_screen(maxSize)
+            let sc = try s.start_screen(settings.maxSize, settings.bitRate, settings.frameRate, settings.audio)
             let f = HEVCFeeder()
                 f.onFormat = { [weak self] w, h in self?.emit { self?.onFormat?(w, h) } }
                 f.onStats = { [weak self] fps, lat in self?.onStats?(fps, lat) }   // already on main
@@ -375,7 +375,7 @@ final class SessionController {
                     // reconnect), so we don't fire a doomed restart against a dead link.
                     self?.queue.asyncAfter(deadline: .now() + 0.8) {
                         guard let self, self.mirrorGen == gen, self.screen != nil else { return }
-                        self.handleStreamDropped(maxSize: maxSize)
+                        self.handleStreamDropped(settings: settings)
                     }
                 }
                 pump.name = "frame-pump"
@@ -425,8 +425,10 @@ final class SessionController {
                 cursorPump.start()
 
                 emitMirroring(true, f.layer)
-                scheduleMirrorWatchdog(gen: gen, maxSize: maxSize)
-                log("mirroring ✓")
+                scheduleMirrorWatchdog(gen: gen, settings: settings)
+                // Banner labels the per-second `mirror_stats` / `mirror-pipe` lines that
+                // follow, so a captured log self-identifies its transport + encoder params.
+                log("mirroring ✓ transport=\(currentDevice?.transport.rawValue ?? "?") maxSize=\(settings.maxSize) bitrate=\(settings.bitRate) fps=\(settings.frameRate) audio=\(settings.audio)")
             } catch {
                 emitMirroring(false, nil)
                 log("start mirror failed: \(ffiMessage(error))")
@@ -437,7 +439,7 @@ final class SessionController {
     /// period (black screen), restart it once the phone has had a moment to reset —
     /// up to `mirrorRecoverMax` times. Only fires while still mirroring this exact
     /// generation, so it never disturbs a working stream or a closed window.
-    private func scheduleMirrorWatchdog(gen: Int, maxSize: Int64) {
+    private func scheduleMirrorWatchdog(gen: Int, settings: MirrorSettings) {
         queue.asyncAfter(deadline: .now() + mirrorRecoverDelay) { [weak self] in
             guard let self,
                   self.mirrorGen == gen, self.screen != nil, !self.firstFrameSeen,
@@ -450,7 +452,7 @@ final class SessionController {
             self.mirrorRecoveries += 1
             log("no frames in \(self.mirrorRecoverDelay)s → recovering mirror (attempt \(self.mirrorRecoveries))")
             self.stopMirrorLocked()
-            self.startMirrorLocked(maxSize: maxSize)
+            self.startMirrorLocked(settings: settings)
         }
     }
 
@@ -571,7 +573,7 @@ final class SessionController {
     /// The mirror stream ended while the control session is still alive (the phone
     /// stopped the mirror service, not the whole connection). Re-open it, bounded by
     /// the same recovery budget as the black-screen watchdog. Runs on `queue`.
-    private func handleStreamDropped(maxSize: Int64) {
+    private func handleStreamDropped(settings: MirrorSettings) {
         guard mirrorRecoveries < mirrorRecoverMax else {
             log("mirror stream dropped; recovery budget exhausted, leaving as-is")
             return
@@ -579,7 +581,7 @@ final class SessionController {
         mirrorRecoveries += 1
         log("mirror stream dropped → restarting (attempt \(mirrorRecoveries))")
         stopMirrorLocked()
-        startMirrorLocked(maxSize: maxSize)
+        startMirrorLocked(settings: settings)
     }
 
     // MARK: - Input (mouse / scroll), dispatched off the main thread

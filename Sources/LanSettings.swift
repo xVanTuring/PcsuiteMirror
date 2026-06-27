@@ -106,6 +106,18 @@ struct PreferencesView: View {
     private var resolution: Binding<MirrorResolution> {
         Binding(get: { model.resolution }, set: { model.setResolution($0) })
     }
+    private var bitrate: Binding<MirrorBitrate> {
+        Binding(get: { model.bitrate }, set: { model.setBitrate($0) })
+    }
+    private var frameRate: Binding<MirrorFrameRate> {
+        Binding(get: { model.frameRate }, set: { model.setFrameRate($0) })
+    }
+    private var audio: Binding<Bool> {
+        Binding(get: { model.audioEnabled }, set: { model.setAudio($0) })
+    }
+    private var preset: Binding<MirrorPreset> {
+        Binding(get: { model.currentPreset }, set: { model.applyPreset($0) })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -124,9 +136,19 @@ struct PreferencesView: View {
 
                 Section {
                     Toggle(L("Auto-reconnect last device"), isOn: $model.autoReconnect)
+                    Picker(L("Mirror preset"), selection: preset) {
+                        ForEach(MirrorPreset.allCases) { Text($0.label).tag($0) }
+                    }
                     Picker(L("Mirror resolution"), selection: resolution) {
                         ForEach(MirrorResolution.allCases) { Text($0.label).tag($0) }
                     }
+                    Picker(L("Mirror bitrate"), selection: bitrate) {
+                        ForEach(MirrorBitrate.allCases) { Text($0.label).tag($0) }
+                    }
+                    Picker(L("Mirror frame rate"), selection: frameRate) {
+                        ForEach(MirrorFrameRate.allCases) { Text($0.label).tag($0) }
+                    }
+                    Toggle(L("Phone audio (experimental)"), isOn: audio)
                     Toggle(L("Show FPS & latency"), isOn: $model.showStats)
                 } header: {
                     Text(L("Connection"))

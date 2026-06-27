@@ -76,6 +76,90 @@ enum MirrorResolution: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// Encoder bitrate cap. `.auto` omits `bit_rate` from `SCREEN_START` so the phone
+/// uses its own default (~4 Mbps); the rest force an explicit override.
+enum MirrorBitrate: String, CaseIterable, Identifiable, Codable {
+    case auto, m4, m8, m12, m20
+    var id: String { rawValue }
+    var bps: Int64 {
+        switch self {
+        case .auto: return 0
+        case .m4: return 4_000_000
+        case .m8: return 8_000_000
+        case .m12: return 12_000_000
+        case .m20: return 20_000_000
+        }
+    }
+    var label: String {
+        switch self {
+        case .auto: return L("Auto")
+        case .m4: return "4 Mbps"
+        case .m8: return "8 Mbps"
+        case .m12: return "12 Mbps"
+        case .m20: return "20 Mbps"
+        }
+    }
+}
+
+/// Encoder frame-rate cap. `.auto` omits `frame_rate` (phone default, 60). The
+/// phone's `MediaProjection`/`VirtualDisplay` screen capture tops out at ~60fps
+/// regardless of the encoder hint (`H264Encoder.DEFAULT_FRAME_RATE=60`), so 60 is
+/// the ceiling; >60 isn't achievable on this path. Lower values (30) do throttle.
+enum MirrorFrameRate: String, CaseIterable, Identifiable, Codable {
+    case auto, fps30, fps60
+    var id: String { rawValue }
+    var fps: Int64 {
+        switch self {
+        case .auto: return 0
+        case .fps30: return 30
+        case .fps60: return 60
+        }
+    }
+    var label: String {
+        switch self {
+        case .auto: return L("Auto")
+        case .fps30: return "30"
+        case .fps60: return "60"
+        }
+    }
+}
+
+/// One-tap encoder profiles. Each (non-`.custom`) maps to a fixed
+/// resolution/bitrate/frame-rate triple; `.custom` means the current knobs don't
+/// match any profile (the user fine-tuned them individually).
+enum MirrorPreset: String, CaseIterable, Identifiable {
+    case custom, smooth, quality, balanced, saver
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .custom: return L("Custom")
+        case .smooth: return L("Smooth (60fps)")
+        case .quality: return L("Quality (full)")
+        case .balanced: return L("Balanced")
+        case .saver: return L("Bandwidth saver")
+        }
+    }
+    /// `nil` for `.custom`; otherwise the (resolution, bitrate, frame-rate) it sets.
+    var triple: (MirrorResolution, MirrorBitrate, MirrorFrameRate)? {
+        switch self {
+        case .custom: return nil
+        case .smooth: return (.medium, .m20, .fps60)   // motion-first: 60fps + headroom
+        case .quality: return (.high, .m20, .fps60)    // full res, best picture
+        case .balanced: return (.high, .m8, .fps60)
+        case .saver: return (.low, .m4, .fps60)        // weak LAN
+        }
+    }
+}
+
+/// Resolved per-stream encoder settings handed to the core's `start_screen`. Bundled
+/// so the mirror lifecycle (start / restart / drop-recovery) threads one value.
+struct MirrorSettings: Equatable {
+    var maxSize: Int64
+    var bitRate: Int64
+    var frameRate: Int64
+    var audio: Bool
+}
+
 /// Phone facts from the `/base-info` gateway (storage capacity, model, OS) — the
 /// data the desktop app shows in its device panel. Built from the tab-separated
 /// string returned by `PcSession.device_info()`.
@@ -173,6 +257,18 @@ enum Store {
     static var resolution: MirrorResolution {
         get { MirrorResolution(rawValue: d.string(forKey: "resolution") ?? "") ?? .high }
         set { d.set(newValue.rawValue, forKey: "resolution") }
+    }
+    static var bitrate: MirrorBitrate {
+        get { MirrorBitrate(rawValue: d.string(forKey: "bitrate") ?? "") ?? .auto }
+        set { d.set(newValue.rawValue, forKey: "bitrate") }
+    }
+    static var frameRate: MirrorFrameRate {
+        get { MirrorFrameRate(rawValue: d.string(forKey: "frameRate") ?? "") ?? .auto }
+        set { d.set(newValue.rawValue, forKey: "frameRate") }
+    }
+    static var mirrorAudio: Bool {
+        get { d.bool(forKey: "mirrorAudio") }   // default off
+        set { d.set(newValue, forKey: "mirrorAudio") }
     }
     static var clipboardDirection: ClipboardDirection {
         get { ClipboardDirection(rawValue: d.string(forKey: "clipboardDirection") ?? "") ?? .both }

@@ -44,6 +44,11 @@ final class AppModel: ObservableObject {
     @Published var showStats: Bool { didSet { Store.showStats = showStats } }
     @Published var lanIP: String { didSet { Store.lanIP = lanIP } }
     @Published private(set) var resolution: MirrorResolution
+    @Published private(set) var bitrate: MirrorBitrate
+    @Published private(set) var frameRate: MirrorFrameRate
+    /// Request the phone's audio stream (no_audio=false). Demuxed off the video path
+    /// but not yet decoded/played — see AudioProbe in the core.
+    @Published private(set) var audioEnabled: Bool
     @Published private(set) var lastDevice: DeviceRef?
     /// The remembered-device roster (device-centric; most-recent first).
     @Published private(set) var knownDevices: [KnownDevice]
@@ -78,6 +83,9 @@ final class AppModel: ObservableObject {
         showStats = Store.showStats
         lanIP = Store.lanIP
         resolution = Store.resolution
+        bitrate = Store.bitrate
+        frameRate = Store.frameRate
+        audioEnabled = Store.mirrorAudio
         lastDevice = Store.lastDevice
         knownDevices = Store.knownDevices
         wire()
@@ -251,7 +259,12 @@ final class AppModel: ObservableObject {
         reconnectDevice = nil
         mirrorLink = .live
     }
-    func startMirror() { controller.startMirror(maxSize: resolution.maxSize) }
+    /// The current resolution/bitrate/fps/audio choices, resolved for the core.
+    var mirrorSettings: MirrorSettings {
+        MirrorSettings(maxSize: resolution.maxSize, bitRate: bitrate.bps,
+                       frameRate: frameRate.fps, audio: audioEnabled)
+    }
+    func startMirror() { controller.startMirror(settings: mirrorSettings) }
     func stopMirror() { controller.stopMirror() }
 
     /// Upsert the just-connected device into the roster, keyed by its stable device
@@ -273,12 +286,54 @@ final class AppModel: ObservableObject {
         log("roster upsert: \(dev.name) [\(dev.id)] → \(knownDevices.count) device(s)")
     }
 
+    /// Which preset the current knobs correspond to, or `.custom` if none.
+    var currentPreset: MirrorPreset {
+        for p in MirrorPreset.allCases {
+            if let t = p.triple, t.0 == resolution, t.1 == bitrate, t.2 == frameRate { return p }
+        }
+        return .custom
+    }
+
+    /// Apply a one-tap preset (sets resolution + bitrate + frame rate together);
+    /// restarts the live stream if mirroring. `.custom` is a no-op.
+    func applyPreset(_ p: MirrorPreset) {
+        guard let t = p.triple else { return }
+        resolution = t.0; Store.resolution = t.0
+        bitrate = t.1; Store.bitrate = t.1
+        frameRate = t.2; Store.frameRate = t.2
+        if mirroring { controller.restartMirror(settings: mirrorSettings) }
+    }
+
     /// Change mirror resolution; restarts the live stream if mirroring.
     func setResolution(_ r: MirrorResolution) {
         guard r != resolution else { return }
         resolution = r
         Store.resolution = r
-        if mirroring { controller.restartMirror(maxSize: r.maxSize) }
+        if mirroring { controller.restartMirror(settings: mirrorSettings) }
+    }
+
+    /// Change mirror bitrate; restarts the live stream if mirroring.
+    func setBitrate(_ b: MirrorBitrate) {
+        guard b != bitrate else { return }
+        bitrate = b
+        Store.bitrate = b
+        if mirroring { controller.restartMirror(settings: mirrorSettings) }
+    }
+
+    /// Change mirror frame rate; restarts the live stream if mirroring.
+    func setFrameRate(_ f: MirrorFrameRate) {
+        guard f != frameRate else { return }
+        frameRate = f
+        Store.frameRate = f
+        if mirroring { controller.restartMirror(settings: mirrorSettings) }
+    }
+
+    /// Toggle phone-audio request; restarts the live stream if mirroring.
+    func setAudio(_ on: Bool) {
+        guard on != audioEnabled else { return }
+        audioEnabled = on
+        Store.mirrorAudio = on
+        if mirroring { controller.restartMirror(settings: mirrorSettings) }
     }
 
     /// Open the mirror window (which begins mirroring) / close it (which stops).
@@ -348,7 +403,7 @@ final class AppModel: ObservableObject {
                 self.cancelReconnect()
                 // Resume mirroring if the window is still open after a recovered drop.
                 if self.mirror.isShowing && !self.mirroring {
-                    self.controller.startMirror(maxSize: self.resolution.maxSize)
+                    self.controller.startMirror(settings: self.mirrorSettings)
                 }
             case .disconnected:
                 self.deviceInfo = nil

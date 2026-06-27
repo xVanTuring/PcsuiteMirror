@@ -73,6 +73,10 @@ final class HEVCFeeder {
             let fps = Double(statFrames) / elapsed
             let avgLatency = statFrames > 0 ? statLatencySum / Double(statFrames) : 0
             if let onStats { DispatchQueue.main.async { onStats(fps, avgLatency) } }
+            // PC-side pipeline cost (off-core arrival → enqueued). It's the control in
+            // the USB-vs-LAN A/B: decode is the same on both links, so a near-constant
+            // value here proves any felt-latency gap is transport (see `mirror_stats`).
+            log(String(format: "mirror-pipe fps=%.1f decode_ms=%.1f", fps, avgLatency))
             statWindowStart = now
             statFrames = 0
             statLatencySum = 0
